@@ -101,9 +101,11 @@ def load_reference_databases_from_drive():
             fh.seek(0)
             
             df_comp = pd.read_csv(fh, low_memory=False)
+            # Find the CAE/IPI column identifier dynamically
+            cae_col = [c for c in df_comp.columns if 'CAE' in c.upper() or 'IPI' in c.upper() or 'IDENTIFIER' in c.upper()][0]
             for _, row in df_comp.iterrows():
                 name_orig = str(row['Name']).strip().upper()
-                cae = clean_cae(row['EPI / CAE / IPI #'] if 'EPI / CAE / IPI #' in df_comp.columns else row.get('CAE Number'))
+                cae = clean_cae(row[cae_col])
                 if name_orig and cae != "no match":
                     name_to_cae[name_orig] = cae
                     tokens = frozenset(name_orig.split())
@@ -121,13 +123,18 @@ def load_reference_databases_from_drive():
             fh.seek(0)
             
             df_cp = pd.read_excel(fh, sheet_name=0) if copub_is_xlsx else pd.read_csv(fh)
+            # Normalize column matching matrix to bypass space variations
+            df_cp.columns = [str(c).strip().upper() for c in df_cp.columns]
+            w_col = [c for c in df_cp.columns if "WRITER" in c][0]
+            p_col = [c for c in df_cp.columns if "ENTITY" in c or "PUBLISHER" in c or "PUBLISHING" in c][0]
+            ipi_col = [c for c in df_cp.columns if "IPI" in c or "CAE" in c][0]
+
             for _, row in df_cp.iterrows():
-                if 'Writer Name' in df_cp.columns and 'Publishing Entity Name' in df_cp.columns:
-                    w_clean = str(row['Writer Name']).split('(pka')[0].strip().upper()
-                    copub_reference_db[w_clean] = {
-                        'pub_name': str(row['Publishing Entity Name']).strip(),
-                        'pub_ipi': clean_cae(row.get('Publishing Entity IPI', 'no match'))
-                    }
+                w_clean = str(row[w_col]).split('(pka')[0].strip().upper()
+                copub_reference_db[w_clean] = {
+                    'pub_name': str(row[p_col]).strip(),
+                    'pub_ipi': clean_cae(row[ipi_col])
+                }
         return name_to_cae, token_set_to_cae, export_names_upper, copub_reference_db, True
     except Exception as e:
         st.error(f"Failed to fetch master files from Google Drive folder location: {e}")
@@ -135,8 +142,45 @@ def load_reference_databases_from_drive():
 
 
 # ==========================================
-# PARSING UTILITIES
+# PARSING & SANITATION UTILITIES
 # ==========================================
+def clean_composer_name(name_str):
+    """Strips parenthetical society markers, uncontrolled strings, and loose digits from names."""
+    if pd.isna(name_str):
+        return ""
+    name_str = str(name_str).strip()
+    # Remove parenthetical elements containing PRO names, numbers, or IPI strings
+    name_str = re.sub(r"\s*\(\s*(BMI|ASCAP|SESAC|SOCAN|SUISA|GEMA|PRS|SACEM|BUMA|STEMRA|IPI|\d+)\s*\)", "", name_str, flags=re.IGNORECASE)
+    # Remove loose words matching PRO banners
+    name_str = re.sub(r"\b(BMI|ASCAP|SESAC|SOCAN|SUISA|GEMA|PRS|IPI)\b", "", name_str, flags=re.IGNORECASE)
+    # Remove loose standalone numeric IPI fragments
+    name_str = re.sub(r"\b\d{7,11}\b", "", name_str)
+    # Clean loose punctuation trails left behind
+    name_str = re.sub(r"[\s\-,/]+$", "", name_str).strip()
+    name_str = re.sub(r"^[\s\-,/]+", "", name_str).strip()
+    return name_str
+
+def find_copub_match(personal_pub_raw, payday_writers, copub_db):
+    """Resolves co-pub entity parameters flexibly across spelling/spacing gaps via intersection maps."""
+    c_pub = clean_composer_name(personal_pub_raw).upper()
+    c_pub_tokens = set(c_pub.split())
+    
+    # Check publisher string matching intersections
+    for w_name, data in copub_db.items():
+        ref_pub = str(data['pub_name']).upper()
+        ref_pub_tokens = set(ref_pub.split())
+        if len(c_pub_tokens.intersection(ref_pub_tokens)) >= 2 or ref_pub in c_pub or c_pub in ref_pub:
+            return data['pub_ipi'], w_name
+            
+    # Fallback to matching standard writer surnames if the corporate tag differs
+    for w in payday_writers:
+        surname = w['name'].split()[-1].upper()
+        for w_name, data in copub_db.items():
+            if surname in w_name:
+                return data['pub_ipi'], w_name
+                
+    return "no match", "Unknown"
+
 def clean_cae(val):
     if pd.isna(val):
         return "no match"
@@ -254,7 +298,9 @@ def parse_writers_block(block_str, name_to_cae, token_set_to_cae, export_names_u
         share_match = re.search(r"([\d.]+)\s*%", name_part)
         if share_match:
             name_part = name_part[: share_match.start()]
-        name = name_part.strip().strip("-").strip("\"'")
+        
+        # Enforce name sanitation on ingestion
+        name = clean_composer_name(name_part)
 
         if ipi == "no match" and name and export_names_upper:
             ipi = query_database_for_cae(name, name_to_cae, token_set_to_cae, export_names_upper)
@@ -357,7 +403,6 @@ if input_file:
             works_data, alts_data, ip_chain_data, qc_data = [], [], [], []
 
             for idx, row in df.iterrows():
-                # --- FIXED: UNCONDITIONAL BASELINE DEFINITION MANAGER ---
                 isrcs = ""
                 
                 orig_title = clean_text(row[col_map["title"]]) if "title" in col_map else ""
@@ -367,7 +412,7 @@ if input_file:
                 release_date = clean_text(row[col_map["release_date"]]) if "release_date" in col_map else ""
                 label = clean_text(row[col_map["label"]]) if "label" in col_map else ""
                 performers = clean_text(row[col_map["artist"]]).replace("\n", "; ").replace(",", ";") if "artist" in col_map else ""
-                performers = "; ".join([p.strip() for p in performers.split(";") if p.strip()])
+                performers = "; ".join([clean_composer_name(p) for p in performers.split(";") if p.strip()])
                 
                 if "isrc" in col_map:
                     raw_isrc_text = clean_text(row[col_map["isrc"]])
@@ -397,212 +442,3 @@ if input_file:
 
                 has_eu_entity = any(w["society"] == "EUROPE" for w in payday_writers)
                 has_na_entity = any(w["society"] in ["ASCAP", "BMI", "SESAC", "SOCAN"] for w in payday_writers)
-                
-                if has_eu_entity and not has_na_entity:
-                    tag2 = "PMPE"
-                elif has_eu_entity and has_na_entity:
-                    tag2 = "PMP + PMPE"
-                else:
-                    tag2 = "PMP"
-
-                tag3 = clean_text(custom_delivery_tag)
-                catalogue_groups = f"{tag1};{tag2};{tag3}"
-                lang = extrapolate_language(clean_title)
-
-                works_data.append({
-                    "ID": "", "Title": clean_title, "Composers": "", "Foreign ID": "", "Project ID": "",
-                    "Party No": "", "Main Identifier": "", "ISWC": "", "Tunecode": "", "Copyright Date": release_date,
-                    "Label Copy": f"(P) {release_date[-4:] if len(release_date)>4 else ''} {label}".strip(), "Priority Work": "False", 
-                    "Production Library Work": "False", "Category": "Pop", "Language": lang, "Composite Type": "None", 
-                    "No. of Composite Works": 0, "Work Version": "Original Work", "Arrangement Type": "Original", 
-                    "Lyric Adaption": "Original", "Performers": performers, "Track ISRCs": isrcs, "Territories": "WW",
-                    "Catalogue Groups": catalogue_groups, "Aliases": "", "Notes": ""
-                })
-
-                for alt in alts:
-                    alts_data.append({"Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Alternate Title": alt, "Language": lang})
-
-                audit_mech_owned, audit_mech_collected, audit_perf_owned, audit_perf_collected = 0.0, 0.0, 0.0, 0.0
-
-                # Initialize a pre-padded blank base dictionary tracking all 125 exact metadata fields
-                base_ip_row = {col: "" for col in IP_CHAIN_HEADERS}
-                base_ip_row["Work Title"] = clean_title
-                base_ip_row["Territory"] = "WW"
-
-                # 1. Map Co-Publishing & Admin Split Segments
-                for cs in copub_shares:
-                    matched_w = None
-                    matched_pub_cae = "no match"
-                    
-                    for ref_name, ref_data in COPUB_REFERENCE_DB.items():
-                        if any(w['name'].split()[-1].lower() in ref_name.lower() for w in payday_writers) and ref_data['pub_name'].upper().split()[0] in cs['personal_pub'].upper():
-                            for w in payday_writers:
-                                if w['name'].split()[-1].lower() in ref_name.lower():
-                                    matched_w = w
-                                    matched_pub_cae = ref_data['pub_ipi']
-                                    break
-                        if matched_w: break
-
-                    if not matched_w and payday_writers:
-                        for w in payday_writers:
-                            if w['name'].split()[-1].lower() in cs['personal_pub'].lower():
-                                matched_w = w
-                                break
-
-                    total_cents = int(round(cs['share'] * 100))
-                    pub_perf_cents = total_cents // 2
-                    writer_perf_cents = total_cents - pub_perf_cents
-
-                    m_owned = round(total_cents / 100.0, 2)
-                    p_owned = round(pub_perf_cents / 100.0, 2)
-                    w_perf = round(writer_perf_cents / 100.0, 2)
-
-                    audit_mech_owned += m_owned
-                    audit_mech_collected += m_owned
-                    audit_perf_owned += (p_owned + w_perf)
-                    audit_perf_collected += (p_owned + w_perf)
-
-                    payday_pub_name, payday_pub_cae = get_publisher_details(matched_w['society'] if matched_w else "BMI")
-
-                    ip_row_payday = dict(base_ip_row)
-                    ip_row_payday.update({
-                        "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,
-                        "Participant 1 Controlled": "True", "Participant 1 Mechanical Owned": 0.0, "Participant 1 Mechanical Collected": m_owned,
-                        "Participant 1 Performance Owned": 0.0, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Administrator",
-                        
-                        "Participant 2 Type": "Publisher", "Participant 2 Name": cs['personal_pub'], "Participant 2 CAE Number": matched_pub_cae,
-                        "Participant 2 Controlled": "True", "Participant 2 Mechanical Owned": m_owned, "Participant 2 Mechanical Collected": 0.0,
-                        "Participant 2 Performance Owned": p_owned, "Participant 2 Performance Collected": 0.0, "Participant 2 Capacity": "Original Publisher",
-                        
-                        "Participant 3 Type": "Composer", "Participant 3 Name": matched_w['name'] if matched_w else "Unknown", "Participant 3 CAE Number": matched_w['ipi'] if matched_w else "no match",
-                        "Participant 3 Controlled": "True", "Participant 3 Mechanical Owned": 0.0, "Participant 3 Mechanical Collected": 0.0,
-                        "Participant 3 Performance Owned": w_perf, "Participant 3 Performance Collected": w_perf, "Participant 3 Capacity": "Lyrics and Music"
-                    })
-                    ip_chain_data.append(ip_row_payday)
-
-                # 2. Map Direct Split Segments
-                payday_groups = defaultdict(list)
-                for pw in payday_writers:
-                    payday_groups[pw["society"]].append(pw)
-
-                for group_key, writers_in_group in payday_groups.items():
-                    payday_pub_name, payday_pub_cae = get_publisher_details(group_key)
-                    
-                    matching_ds = []
-                    for d in direct_shares:
-                        p_pub = d['payday_pub'].upper()
-                        if group_key == "EUROPE" and any(x in p_pub for x in ["EUROPE", "SUISA", "GEMA", "PRS"]):
-                            matching_ds.append(d)
-                        elif group_key == "BMI" and "EMPIRE" in p_pub:
-                            matching_ds.append(d)
-                        elif group_key == "ASCAP" and "TUNES (ASCAP)" in p_pub:
-                            matching_ds.append(d)
-                        elif group_key == "SOCAN" and "CANADA" in p_pub:
-                            matching_ds.append(d)
-                        elif group_key == "SESAC" and "PAYREC" in p_pub:
-                            matching_ds.append(d)
-
-                    ds_share = matching_ds[0]['share'] if matching_ds else 0.0
-                    if ds_share == 0.0: continue
-                    
-                    total_cents = int(round(ds_share * 100))
-                    pub_perf_cents = total_cents // 2
-                    writer_perf_total_cents = total_cents - pub_perf_cents
-
-                    m_owned = round(total_cents / 100.0, 2)
-                    p_owned = round(pub_perf_cents / 100.0, 2)
-
-                    audit_mech_owned += m_owned
-                    audit_mech_collected += m_owned
-                    audit_perf_owned += p_owned
-                    audit_perf_collected += p_owned
-
-                    ip_row_payday = dict(base_ip_row)
-                    ip_row_payday.update({
-                        "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,
-                        "Participant 1 Controlled": "True", "Participant 1 Mechanical Owned": m_owned, "Participant 1 Mechanical Collected": m_owned,
-                        "Participant 1 Performance Owned": p_owned, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Original Publisher",
-                    })
-
-                    num_writers = len(writers_in_group)
-                    base_writer_cents = writer_perf_total_cents // num_writers
-                    extra_cents_remainder = writer_perf_total_cents % num_writers
-
-                    for p_idx, pw in enumerate(writers_in_group, start=2):
-                        if p_idx > 10: break
-                        prefix = f"Participant {p_idx}"
-                        allocated_cents = base_writer_cents + (1 if (p_idx - 2) < extra_cents_remainder else 0)
-                        formatted_pw_perf = round(allocated_cents / 100.0, 2)
-
-                        audit_perf_owned += formatted_pw_perf
-                        audit_perf_collected += formatted_pw_perf
-
-                        ip_row_payday.update({
-                            f"{prefix} Type": "Composer", f"{prefix} Name": pw["name"], f"{prefix} CAE Number": pw["ipi"],
-                            f"{prefix} Controlled": "True", f"{prefix} Mechanical Owned": 0.0, f"{prefix} Mechanical Collected": 0.0,
-                            f"{prefix} Performance Owned": formatted_pw_perf, f"{prefix} Performance Collected": formatted_pw_perf, f"{prefix} Capacity": "Lyrics and Music",
-                        })
-                    ip_chain_data.append(ip_row_payday)
-
-                # 3. Add Outside Composers
-                if addl_writers:
-                    ip_row_outside = dict(base_ip_row)
-                    for p_idx, aw in enumerate(addl_writers, start=1):
-                        if p_idx > 10: break
-                        prefix = f"Participant {p_idx}"
-                        formatted_aw_share = round(aw["share"], 2)
-
-                        audit_mech_owned += formatted_aw_share
-                        audit_mech_collected += formatted_aw_share
-                        audit_perf_owned += formatted_aw_share
-                        audit_perf_collected += formatted_aw_share
-
-                        ip_row_outside.update({
-                            f"{prefix} Type": "Composer", f"{prefix} Name": aw["name"], f"{prefix} CAE Number": aw["ipi"],
-                            f"{prefix} Controlled": "False", f"{prefix} Mechanical Owned": formatted_aw_share, f"{prefix} Mechanical Collected": formatted_aw_share,
-                            f"{prefix} Performance Owned": formatted_aw_share, f"{prefix} Performance Collected": formatted_aw_share, f"{prefix} Capacity": "Lyrics and Music",
-                        })
-                    ip_chain_data.append(ip_row_outside)
-
-                payday_writer_names = "; ".join([pw["name"] for pw in payday_writers]) if payday_writers else "None"
-                
-                if "ADMIN" in agreement_text:
-                    region_tag = "ADMIN CATALOG REPERTOIRE"
-                elif copub_shares:
-                    region_tag = "CO-PUB REPERTOIRE"
-                else:
-                    region_tag = "STANDARD CATALOG REPERTOIRE"
-
-                qc_data.append({
-                    "Work Title": clean_title,
-                    "Repertoire Region": region_tag,
-                    "Payday Writers": payday_writer_names,
-                    "Total Mechanical Owned": round(audit_mech_owned, 2),
-                    "Total Mechanical Collected": round(audit_mech_collected, 2),
-                    "Total Performance Owned": round(audit_perf_owned, 2),
-                    "Total Performance Collected": round(audit_perf_collected, 2)
-                })
-
-            st.session_state.df_works = pd.DataFrame(works_data)
-            st.session_state.df_alts = pd.DataFrame(alts_data)
-            
-            df_ip_out = pd.DataFrame(ip_chain_data)
-            if not df_ip_out.empty:
-                st.session_state.df_ip = df_ip_out.reindex(columns=IP_CHAIN_HEADERS)
-            else:
-                st.session_state.df_ip = pd.DataFrame(columns=IP_CHAIN_HEADERS)
-                
-            st.session_state.df_qc = pd.DataFrame(qc_data)
-            st.session_state.processed = True
-
-        if st.session_state.processed:
-            st.markdown("---")
-            st.subheader("📥 Download Generated Sheets")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1: st.download_button("📋 Download Works Tab", data=st.session_state.df_works.to_csv(index=False).encode('utf-8'), file_name="Curve_Works_Tab.csv", mime="text/csv")
-            with col2: st.download_button("🔗 Download Alternate Titles", data=st.session_state.df_alts.to_csv(index=False).encode('utf-8'), file_name="Curve_Alternate_Titles_Tab.csv", mime="text/csv")
-            with col3: st.download_button("⛓️ Download IP Chain Tab", data=st.session_state.df_ip.to_csv(index=False).encode('utf-8'), file_name="Curve_IP_Chain_Tab.csv", mime="text/csv")
-            with col4: st.download_button("🔍 Download QC Audit Log", data=st.session_state.df_qc.to_csv(index=False).encode('utf-8'), file_name="Curve_Quality_Control.csv", mime="text/csv")
-
-            st.subheader("📊 Quality Control Summary Preview")
-            st.dataframe(st.session_state.df_qc, use_container_width=True)

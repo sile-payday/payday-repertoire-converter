@@ -44,7 +44,7 @@ COPUB_REFERENCE_DB = {}
 def get_gdrive_service():
     """Builds a verified credential pass over Streamlit cloud secrets configuration."""
     if "gdrive" not in st.secrets:
-        st.error("Missing Google Drive API credentials. Please configure secrets in Streamlit.")
+        st.error("Missing Google Drive API credentials. Please configure secrets in Streamlit Secrets.")
         return None
     
     creds_dict = dict(st.secrets["gdrive"])
@@ -309,6 +309,9 @@ if db_connected:
 else:
     st.sidebar.warning("Cloud databases offline. Check Streamlit API Secrets.")
 
+# Custom delimiter catalogue tag string input widget (Tag 3)
+custom_delivery_tag = st.text_input("📁 Enter Custom Catalogue Delivery Tag (Appended as 3rd delimiter value)", value="2026 - July New Works")
+
 input_file = st.file_uploader("Upload your MCAT Excerpt File", type=["csv", "xlsx"])
 
 if input_file:
@@ -322,6 +325,7 @@ if input_file:
     if df is not None:
         if st.button("🚀 Process Repertoire Layouts", type="primary"):
             
+            # Smart Header Mapper Matrix
             col_map = {}
             for col in df.columns:
                 c_norm = col.strip().upper().replace("\n", " ")
@@ -351,26 +355,7 @@ if input_file:
                 isrcs = clean_text(row[col_map["isrc"]]).replace("\n", "; ").replace(",", ";") if "isrc" in col_map else ""
                 isrcs = "; ".join([i.strip() for i in isrcs.split(";") if i.strip()])
 
-                cession_val = clean_text(row[col_map["cession"]]).upper() if "cession" in col_map else ""
-                notes_cession = "Mixed" if ("Y" in cession_val and "N" in cession_val) else ("BIEM" if "Y" in cession_val else "AA")
-                
-                lang = extrapolate_language(clean_title)
-
-                # --- BUILD WORKS DICTIONARY DATA TAB ---
-                works_data.append({
-                    "ID": "", "Title": clean_title, "Composers": "", "Foreign ID": "", "Project ID": "",
-                    "Party No": "", "Main Identifier": "", "ISWC": "", "Tunecode": "", "Copyright Date": release_date,
-                    "Label Copy": f"(P) {release_date[-4:] if len(release_date)>4 else ''} {label}".strip(), "Priority Work": "False", 
-                    "Production Library Work": "False", "Category": "Pop", "Language": lang, "Composite Type": "None", 
-                    "No. of Composite Works": 0, "Work Version": "Original Work", "Arrangement Type": "Original", 
-                    "Lyric Adaption": "Original", "Performers": performers, "Track ISRCs": isrcs, "Territories": "WW",
-                    "Catalogue Groups": "PMPE;2026 - July New Works", "Aliases": "", "Notes": notes_cession
-                })
-
-                for alt in alts:
-                    alts_data.append({"Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Alternate Title": alt, "Language": lang})
-
-                # --- ADVANCED IP CHAIN RESOLUTION ENGINE ---
+                # --- EXTRACT STRUCTURAL METADATA ARRAYS ---
                 raw_shares_text = clean_text(row[col_map["shares"]]) if "shares" in col_map else ""
                 raw_writers_text = clean_text(row[col_map["writers"]]) if "writers" in col_map else ""
                 raw_ipis_text = clean_text(row[col_map["ipis"]]) if "ipis" in col_map else ""
@@ -381,6 +366,47 @@ if input_file:
                 payday_writers = parse_payday_writers(raw_writers_text, raw_ipis_text, title_context=clean_title, fallback_society=row_fallback)
                 addl_writers = parse_writers_block(raw_addl_text, title_context=clean_title)
                 direct_shares, copub_shares = parse_shares_field(raw_shares_text)
+
+                # --- 1. CATALOGUE GROUPS THREE-TAG STRRATIFICATION CONCATENATOR ---
+                # Tag 1: Cession Validation
+                cession_val = clean_text(row[col_map["cession"]]).upper() if "cession" in col_map else ""
+                if "Y" in cession_val and "N" in cession_val:
+                    tag1 = "Mixed"
+                elif "Y" in cession_val and "N" not in cession_val:
+                    tag1 = "Non-AA"
+                else:
+                    tag1 = "AA"
+
+                # Tag 2: Corporate Territory Profiles
+                has_eu_entity = any(w["society"] == "EUROPE" for w in payday_writers)
+                has_na_entity = any(w["society"] in ["ASCAP", "BMI", "SESAC", "SOCAN"] for w in payday_writers)
+                
+                if has_eu_entity and not has_na_entity:
+                    tag2 = "PMPE"
+                elif has_eu_entity and has_na_entity:
+                    tag2 = "PMP + PMPE"
+                else:
+                    tag2 = "PMP"
+
+                # Tag 3: Appended customized label block entry
+                tag3 = clean_text(custom_delivery_tag)
+                catalogue_groups = f"{tag1};{tag2};{tag3}"
+
+                lang = extrapolate_language(clean_title)
+
+                # --- FIXED: "NOTES" COLUMN PAIR CLEARED OUT TO EMPTY STRING RAW VALUES ---
+                works_data.append({
+                    "ID": "", "Title": clean_title, "Composers": "", "Foreign ID": "", "Project ID": "",
+                    "Party No": "", "Main Identifier": "", "ISWC": "", "Tunecode": "", "Copyright Date": release_date,
+                    "Label Copy": f"(P) {release_date[-4:] if len(release_date)>4 else ''} {label}".strip(), "Priority Work": "False", 
+                    "Production Library Work": "False", "Category": "Pop", "Language": lang, "Composite Type": "None", 
+                    "No. of Composite Works": 0, "Work Version": "Original Work", "Arrangement Type": "Original", 
+                    "Lyric Adaption": "Original", "Performers": performers, "Track ISRCs": isrcs, "Territories": "WW",
+                    "Catalogue Groups": catalogue_groups, "Aliases": "", "Notes": ""
+                })
+
+                for alt in alts:
+                    alts_data.append({"Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Alternate Title": alt, "Language": lang})
 
                 audit_mech_owned, audit_mech_collected, audit_perf_owned, audit_perf_collected = 0.0, 0.0, 0.0, 0.0
 
@@ -419,6 +445,7 @@ if input_file:
 
                     payday_pub_name, payday_pub_cae = get_publisher_details(matched_w['society'] if matched_w else "BMI")
 
+                    # Participant 1 = Payday (Admin), Participant 2 = Entity (Orig), Participant 3 = Writer
                     ip_chain_data.append({
                         "Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Territory": "WW",
                         "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,

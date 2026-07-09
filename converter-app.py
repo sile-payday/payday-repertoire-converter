@@ -334,12 +334,17 @@ if input_file:
                 elif "PAYDAY WRITER" in c_norm and "CAE" not in c_norm: col_map["writers"] = col
                 elif "CAE" in c_norm or "IPI" in c_norm: col_map["ipis"] = col
                 elif "ADD" in c_norm and "WRITER" in c_norm: col_map["addl"] = col
-                elif "ISRC" in c_norm: col_map["isrc"] = col
                 elif "RELEASE DATE" in c_norm: col_map["release_date"] = col
                 elif "LABEL" in c_norm: col_map["label"] = col
                 elif "ARTIST" in c_norm: col_map["artist"] = col
                 elif "CESSION" in c_norm: col_map["cession"] = col
                 elif "AGREEMENT" in c_norm: col_map["agreement"] = col
+
+            # --- FIXED: SHORTEST-NAME PRIORITY RESOLUTION SYSTEM FOR ISRC CODES ---
+            isrc_cols = [c for c in df.columns if "ISRC" in c.strip().upper()]
+            if isrc_cols:
+                isrc_cols.sort(key=len)
+                col_map["isrc"] = isrc_cols[0]
 
             works_data, alts_data, ip_chain_data, qc_data = [], [], [], []
 
@@ -353,10 +358,9 @@ if input_file:
                 performers = clean_text(row[col_map["artist"]]).replace("\n", "; ").replace(",", ";") if "artist" in col_map else ""
                 performers = "; ".join([p.strip() for p in performers.split(";") if p.strip()])
                 
-                # --- FIXED: RE-ARCHITECTED ROBUST ISRC EXTRACTOR METADATA MODULE ---
+                # --- EXTRACT CLEAN SEMICOLONED TRACK ISRCS ---
                 if "isrc" in col_map:
                     raw_isrc_text = clean_text(row[col_map["isrc"]])
-                    # Cleaves text strings cleanly by any newlines, commas, or spaces
                     isrc_tokens = re.split(r"[\s,\n;]+", raw_isrc_text)
                     isrcs = ";".join([i.strip() for i in isrc_tokens if i.strip()])
                 else:

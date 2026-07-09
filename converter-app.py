@@ -146,7 +146,7 @@ def clean_composer_name(name_str):
     """Strips parenthetical society markers, uncontrolled strings, and loose digits from names."""
     if pd.isna(name_str):
         return ""
-    name_str = str(name_str).strip()
-    name_str = re.sub(r"\s*\(\s*(BMI|ASCAP|SESAC|SOCAN|SUISA|GEMA|PRS|SACEM|BUMA|STEMRA|IPI|\d+)\s*\)", "", name_str, flags=re.IGNORECASE)
-    name_str = re.sub(r"\b(BMI|ASCAP|SESAC|SOCAN|SUISA|GEMA|PRS|IPI)\b", "", name_str, flags=re.IGNORECASE)
-    name_str =
+    s = str(name_str).strip()
+    s = re.sub(r"\s*\(\s*(BMI|ASCAP|SESAC|SOCAN|SUISA|GEMA|PRS|SACEM|BUMA|STEMRA|IPI|\d+)\s*\)", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\b(BMI|ASCAP|SESAC|SOCAN|SUISA|GEMA|PRS|IPI)\b", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\b\d{7,11

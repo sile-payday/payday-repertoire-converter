@@ -8,8 +8,8 @@ from collections import defaultdict
 # Page setup configuration
 st.set_page_config(page_title="Payday Repertoire Converter", page_icon="🎵", layout="wide")
 
-st.title("🎵 Payday Repertoire Converter")
-st.markdown("Upload your master delivery spreadsheet below to instantly generate your Curve ingestion files and audit balance sheets.")
+st.title("🎵 MCAT Converter")
+st.markdown("Retrieve the most recent Composer Export and co-pub reference from G:\Shared drives\Publishing Admin\Writer Clients\Bulk Import WIP (Pub admin google drive)<br> Prepare your MCAT excerpt of works you want to import<br>if you get an error message ask AI (give it the link to the app and also the error message you receive)")
 
 # Initialize session state variables to prevent download button resets
 if 'processed' not in st.session_state:

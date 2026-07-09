@@ -5,13 +5,18 @@ import streamlit as st
 import pandas as pd
 from collections import defaultdict
 
-# Page setup configuration matching your new name
+# Google API client imports
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
+
+# Page setup configuration
 st.set_page_config(page_title="MCAT Converter", page_icon="🎵", layout="wide")
 
 st.title("🎵 MCAT Converter")
 st.markdown("""
-1. **Retrieve the most recent Composer Export and co-pub reference** from `G:\\Shared drives\\Publishing Admin\\Writer Clients\\Bulk Import WIP` (Pub admin google drive).
-2. **Prepare your MCAT excerpt** of works you want to import.
+1. **The app automatically pulls the most recent Composer Export and co-pub reference sheets** from your shared Google Drive folder layout.
+2. **Prepare your MCAT excerpt** of works you want to import below.
 3. 💡 *If you get an error message, ask AI (give it the link to this app along with the exact error message you receive).*
 """)
 st.markdown("---")
@@ -29,13 +34,107 @@ if 'df_qc' not in st.session_state:
     st.session_state.df_qc = None
 
 # ==========================================
-# ADVANCED FUZZY MATCHING REFERENCE ENGINES
+# AUTOMATED GOOGLE DRIVE FETCH ENGINE
 # ==========================================
+FOLDER_ID = "13-mxc5a2rIEly3ZMVSOoQjlDA4cmYx-D"
+
 NAME_TO_CAE = {}
 TOKEN_SET_TO_CAE = {}
 EXPORT_NAMES_UPPER = []
 COPUB_REFERENCE_DB = {}
 
+def get_gdrive_service():
+    """Authenticates using Streamlit's secure Secrets manager profile."""
+    if "gdrive" not in st.secrets:
+        st.error("Missing Google Drive API credentials. Please configure secrets in Streamlit Cloud.")
+        return None
+    
+    # Reconstruct the credential JSON format from Streamlit Secrets storage
+    creds_dict = dict(st.secrets["gdrive"])
+    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+    
+    scopes = ['https://www.googleapis.com/auth/drive.readonly']
+    creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    return build('drive', 'v3', credentials=creds)
+
+@st.cache_data(ttl=3600) # Caches data for 1 hour so it doesn't hammer Google Drive on every click
+def load_reference_databases_from_drive():
+    global NAME_TO_CAE, TOKEN_SET_TO_CAE, EXPORT_NAMES_UPPER, COPUB_REFERENCE_DB
+    
+    service = get_gdrive_service()
+    if not service:
+        return False
+        
+    try:
+        # 1. Query the folder contents to find files matching your catalog patterns
+        results = service.files().list(
+            q=f"'{FOLDER_ID}' in parents and trashed = false",
+            fields="files(id, name)"
+        ).execute()
+        files = results.get('files', [])
+        
+        composer_file_id = None
+        copub_file_id = None
+        copub_is_xlsx = True
+        
+        for f in files:
+            name_upper = f['name'].upper()
+            if "COMPOSER EXPORT" in name_upper:
+                composer_file_id = f['id']
+            elif "CO-PUB REFERENCE" in name_upper or "CO-PUB" in name_upper:
+                copub_file_id = f['id']
+                copub_is_xlsx = f['name'].endswith('.xlsx')
+
+        # 2. Download and process the Composer Export file
+        if composer_file_id:
+            request = service.files().get_media(fileId=composer_file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            fh.seek(0)
+            
+            df_comp = pd.read_csv(fh, low_memory=False)
+            NAME_TO_CAE.clear()
+            TOKEN_SET_TO_CAE.clear()
+            for _, row in df_comp.iterrows():
+                name_orig = str(row['Name']).strip().upper()
+                cae = clean_cae(row['CAE Number'])
+                if name_orig and cae != "no match":
+                    NAME_TO_CAE[name_orig] = cae
+                    tokens = frozenset(name_orig.split())
+                    if tokens:
+                        TOKEN_SET_TO_CAE[tokens] = cae
+            EXPORT_NAMES_UPPER = list(NAME_TO_CAE.keys())
+            
+        # 3. Download and process the Co-Pub reference matrix
+        if copub_file_id:
+            request = service.files().get_media(fileId=copub_file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            fh.seek(0)
+            
+            df_cp = pd.read_excel(fh, sheet_name=0) if copub_is_xlsx else pd.read_csv(fh)
+            COPUB_REFERENCE_DB.clear()
+            for _, row in df_cp.iterrows():
+                if 'Writer Name' in df_cp.columns and 'Publishing Entity Name' in df_cp.columns:
+                    w_clean = str(row['Writer Name']).split('(pka')[0].strip().upper()
+                    COPUB_REFERENCE_DB[w_clean] = {
+                        'pub_name': str(row['Publishing Entity Name']).strip(),
+                        'pub_ipi': clean_cae(row.get('Publishing Entity IPI', 'no match'))
+                    }
+        return True
+    except Exception as e:
+        st.error(f"Failed to fetch master files from Google Drive folder location: {e}")
+        return False
+
+# ==========================================
+# PARSING UTILITIES
+# ==========================================
 def clean_cae(val):
     if pd.isna(val):
         return "no match"
@@ -45,45 +144,6 @@ def clean_cae(val):
     if s.isdigit():
         s = s.zfill(9)
     return s
-
-def index_composer_database(uploaded_db_file):
-    global NAME_TO_CAE, TOKEN_SET_TO_CAE, EXPORT_NAMES_UPPER
-    NAME_TO_CAE.clear()
-    TOKEN_SET_TO_CAE.clear()
-    EXPORT_NAMES_UPPER.clear()
-    if uploaded_db_file is None:
-        return
-    try:
-        df_comp = pd.read_csv(uploaded_db_file, low_memory=False)
-        for _, row in df_comp.iterrows():
-            name_orig = str(row['Name']).strip().upper()
-            cae = clean_cae(row['CAE Number'])
-            if name_orig and cae != "no match":
-                NAME_TO_CAE[name_orig] = cae
-                tokens = frozenset(name_orig.split())
-                if tokens:
-                    TOKEN_SET_TO_CAE[tokens] = cae
-        EXPORT_NAMES_UPPER = list(NAME_TO_CAE.keys())
-    except Exception as e:
-        st.error(f"Failed to read Composer Export file: {e}")
-
-def index_copub_reference(uploaded_copub_file):
-    global COPUB_REFERENCE_DB
-    COPUB_REFERENCE_DB.clear()
-    if uploaded_copub_file is None:
-        return
-    try:
-        df_cp = pd.read_excel(uploaded_copub_file, sheet_name=0) if uploaded_copub_file.name.endswith('.xlsx') else pd.read_csv(uploaded_copub_file)
-        for _, row in df_cp.iterrows():
-            if 'Writer Name' in df_cp.columns and 'Publishing Entity Name' in df_cp.columns:
-                w_clean = str(row['Writer Name']).split('(pka')[0].strip().upper()
-                COPUB_REFERENCE_DB[w_clean] = {
-                    'pub_name': str(row['Publishing Entity Name']).strip(),
-                    'pub_ipi': clean_cae(row.get('Publishing Entity IPI', 'no match'))
-                }
-        st.sidebar.success(f"Indexed {len(COPUB_REFERENCE_DB)} co-publishing/admin contract entities!")
-    except Exception as e:
-        st.sidebar.error(f"Failed to index reference matrix: {e}")
 
 def query_database_for_cae(name_str):
     name_str = str(name_str).strip().upper()
@@ -106,10 +166,6 @@ def query_database_for_cae(name_str):
         return NAME_TO_CAE[matches[0]]
     return "no match"
 
-
-# ==========================================
-# PARSING UTILITIES
-# ==========================================
 def clean_text(text):
     if pd.isna(text):
         return ""
@@ -246,20 +302,17 @@ def get_publisher_details(society_name):
 
 
 # ==========================================
-# INTERFACE SIDEBAR FILTERS
+# BACKGROUND DATA TRIGGER EXECUTION
 # ==========================================
-with st.sidebar:
-    st.header("🗄️ Reference Databases")
-    db_file = st.file_uploader("Upload 'Composer Export' (.csv)", type=["csv"])
-    if db_file:
-        index_composer_database(db_file)
-        st.success("Main database linked!")
-        
-    copub_file = st.file_uploader("Upload 'co-pub reference' (.xlsx/.csv)", type=["csv", "xlsx"])
-    if copub_file:
-        index_copub_reference(copub_file)
+# Automatically connect and pull reference logs from Drive folder structure seamlessly
+db_connected = load_reference_databases_from_drive()
 
-input_file = st.file_uploader("Upload your MCAT Excerpt File (CSV or Excel)", type=["csv", "xlsx"])
+if db_connected:
+    st.sidebar.success(f"Linked: Cloud databases active ({len(EXPORT_NAMES_UPPER)} writers / {len(COPUB_REFERENCE_DB)} co-pubs)")
+else:
+    st.sidebar.warning("Cloud databases offline. Check Streamlit deployment context configs.")
+
+input_file = st.file_uploader("Upload your MCAT Excerpt File", type=["csv", "xlsx"])
 
 if input_file:
     try:

@@ -103,7 +103,7 @@ def load_reference_databases_from_drive():
             df_comp = pd.read_csv(fh, low_memory=False)
             for _, row in df_comp.iterrows():
                 name_orig = str(row['Name']).strip().upper()
-                cae = clean_cae(row['CAE Number'])
+                cae = clean_cae(row['EPI / CAE / IPI #'] if 'EPI / CAE / IPI #' in df_comp.columns else row.get('CAE Number'))
                 if name_orig and cae != "no match":
                     name_to_cae[name_orig] = cae
                     tokens = frozenset(name_orig.split())
@@ -310,7 +310,6 @@ def get_publisher_details(society_name):
 # ==========================================
 # BACKGROUND DATA AUTOMATED FETCH
 # ==========================================
-# SAFE RE-ASSIGNMENT MATRIX outside of the cache blocker engine
 NAME_TO_CAE, TOKEN_SET_TO_CAE, EXPORT_NAMES_UPPER, COPUB_REFERENCE_DB, db_connected = load_reference_databases_from_drive()
 
 if db_connected:
@@ -358,6 +357,9 @@ if input_file:
             works_data, alts_data, ip_chain_data, qc_data = [], [], [], []
 
             for idx, row in df.iterrows():
+                # --- FIXED: UNCONDITIONAL BASELINE DEFINITION MANAGER ---
+                isrcs = ""
+                
                 orig_title = clean_text(row[col_map["title"]]) if "title" in col_map else ""
                 if not orig_title: continue
 
@@ -370,9 +372,7 @@ if input_file:
                 if "isrc" in col_map:
                     raw_isrc_text = clean_text(row[col_map["isrc"]])
                     isrc_tokens = re.split(r"[\s,\n;]+", raw_isrc_text)
-                    isrcs = ";".join([i.strip() for i in isrcs.split(";") if i.strip()])
-                else:
-                    isrcs = ""
+                    isrcs = ";".join([i.strip() for i in isrc_tokens if i.strip()])
 
                 # --- EXTRACT STRUCTURAL METADATA ARRAYS ---
                 raw_shares_text = clean_text(row[col_map["shares"]]) if "shares" in col_map else ""

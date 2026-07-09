@@ -367,8 +367,7 @@ if input_file:
                 addl_writers = parse_writers_block(raw_addl_text, title_context=clean_title)
                 direct_shares, copub_shares = parse_shares_field(raw_shares_text)
 
-                # --- 1. CATALOGUE GROUPS THREE-TAG STRRATIFICATION CONCATENATOR ---
-                # Tag 1: Cession Validation
+                # --- 1. CATALOGUE GROUPS THREE-TAG STRATIFICATION CONCATENATOR ---
                 cession_val = clean_text(row[col_map["cession"]]).upper() if "cession" in col_map else ""
                 if "Y" in cession_val and "N" in cession_val:
                     tag1 = "Mixed"
@@ -377,7 +376,6 @@ if input_file:
                 else:
                     tag1 = "AA"
 
-                # Tag 2: Corporate Territory Profiles
                 has_eu_entity = any(w["society"] == "EUROPE" for w in payday_writers)
                 has_na_entity = any(w["society"] in ["ASCAP", "BMI", "SESAC", "SOCAN"] for w in payday_writers)
                 
@@ -388,13 +386,11 @@ if input_file:
                 else:
                     tag2 = "PMP"
 
-                # Tag 3: Appended customized label block entry
                 tag3 = clean_text(custom_delivery_tag)
                 catalogue_groups = f"{tag1};{tag2};{tag3}"
 
                 lang = extrapolate_language(clean_title)
 
-                # --- FIXED: "NOTES" COLUMN PAIR CLEARED OUT TO EMPTY STRING RAW VALUES ---
                 works_data.append({
                     "ID": "", "Title": clean_title, "Composers": "", "Foreign ID": "", "Project ID": "",
                     "Party No": "", "Main Identifier": "", "ISWC": "", "Tunecode": "", "Copyright Date": release_date,
@@ -483,7 +479,8 @@ if input_file:
                         elif group_key == "SESAC" and "PAYREC" in p_pub:
                             matching_ds.append(d)
 
-                    ds_share = matching_ds[0]['share'] if matching_ds else (direct_shares[0]['share'] if direct_shares else 0.0)
+                    # --- FIXED: STRICTLY FALLBACK TO 0.0 IF NO REPERTOIRE MATCH IS DESIGNATED ---
+                    ds_share = matching_ds[0]['share'] if matching_ds else 0.0
                     if ds_share == 0.0: continue
                     
                     total_cents = int(round(ds_share * 100))

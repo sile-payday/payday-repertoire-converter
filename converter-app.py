@@ -49,7 +49,8 @@ def index_composer_database(uploaded_db_file):
     if uploaded_db_file is None:
         return
     try:
-        df_comp = pd.read_csv(uploaded_db_file)
+        # Added low_memory=False to eliminate Dtype Warnings from the system logs
+        df_comp = pd.read_csv(uploaded_db_file, low_memory=False)
         for _, row in df_comp.iterrows():
             name_orig = str(row['Name']).strip().upper()
             cae = clean_cae(row['CAE Number'])
@@ -78,7 +79,7 @@ def index_copub_reference(uploaded_copub_file):
                 }
         st.sidebar.success(f"Indexed {len(COPUB_REFERENCE_DB)} co-publishing/admin contract entities!")
     except Exception as e:
-        st.sidebar.error(f"Failed to index reference matrix: {e}")
+        st.sidebar.error(f"Failed to index co-pub reference matrix: {e}")
 
 def query_database_for_cae(name_str):
     name_str = str(name_str).strip().upper()
@@ -219,6 +220,19 @@ def parse_payday_writers(writer_str, ipi_str, title_context="", fallback_society
         final_writers.append({"name": rw["name"], "ipi": w_ipi, "share": rw["share"], "society": rw["society"]})
     return final_writers
 
+def extrapolate_language(clean_title):
+    title_lower = clean_title.lower()
+    german_keywords = ["meiner", "halb", "was", "ich", "tipps", "bruder"]
+    french_keywords = ["suis", "encore", "rouge", "noir", "nous", "rêve", "moi"]
+
+    if any(k in title_lower for k in german_keywords):
+        return "German"
+    if any(k in title_lower for k in french_keywords):
+        return "French"
+    if "korean version" in title_lower:
+        return "Korean"
+    return "English"
+
 def get_publisher_details(society_name):
     if society_name == "SOCAN": return "Payday Tunes Canada (SOCAN)", "1299996356"
     elif society_name == "ASCAP": return "Payday Tunes (ASCAP)", "1295254826"
@@ -286,6 +300,8 @@ if input_file:
 
                 cession_val = clean_text(row[col_map["cession"]]).upper() if "cession" in col_map else ""
                 notes_cession = "Mixed" if ("Y" in cession_val and "N" in cession_val) else ("BIEM" if "Y" in cession_val else "AA")
+                
+                # Resolving the language definition safely
                 lang = extrapolate_language(clean_title)
 
                 works_data.append({
@@ -440,7 +456,6 @@ if input_file:
 
                 payday_writer_names = "; ".join([pw["name"] for pw in payday_writers]) if payday_writers else "None"
                 
-                # Tag Repertoire type explicitly in QC Audit log
                 if "ADMIN" in agreement_text:
                     region_tag = "ADMIN CATALOG REPERTOIRE"
                 elif copub_shares:

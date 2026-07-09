@@ -5,12 +5,7 @@ import streamlit as st
 import pandas as pd
 from collections import defaultdict
 
-# Google API client imports
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-
-# Page setup configuration
+# Page setup configuration matching your name
 st.set_page_config(page_title="MCAT Converter", page_icon="🎵", layout="wide")
 
 st.title("🎵 MCAT Converter")
@@ -49,7 +44,6 @@ def get_gdrive_service():
         st.error("Missing Google Drive API credentials. Please configure secrets in Streamlit Cloud.")
         return None
     
-    # Reconstruct the credential JSON format from Streamlit Secrets storage
     creds_dict = dict(st.secrets["gdrive"])
     creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
     
@@ -57,16 +51,20 @@ def get_gdrive_service():
     creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
     return build('drive', 'v3', credentials=creds)
 
-@st.cache_data(ttl=3600) # Caches data for 1 hour so it doesn't hammer Google Drive on every click
+@st.cache_data(ttl=3600)
 def load_reference_databases_from_drive():
     global NAME_TO_CAE, TOKEN_SET_TO_CAE, EXPORT_NAMES_UPPER, COPUB_REFERENCE_DB
     
+    # Import these inside the cached function to keep execution streams clear
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload
+
     service = get_gdrive_service()
     if not service:
         return False
         
     try:
-        # 1. Query the folder contents to find files matching your catalog patterns
         results = service.files().list(
             q=f"'{FOLDER_ID}' in parents and trashed = false",
             fields="files(id, name)"
@@ -85,7 +83,6 @@ def load_reference_databases_from_drive():
                 copub_file_id = f['id']
                 copub_is_xlsx = f['name'].endswith('.xlsx')
 
-        # 2. Download and process the Composer Export file
         if composer_file_id:
             request = service.files().get_media(fileId=composer_file_id)
             fh = io.BytesIO()
@@ -108,7 +105,6 @@ def load_reference_databases_from_drive():
                         TOKEN_SET_TO_CAE[tokens] = cae
             EXPORT_NAMES_UPPER = list(NAME_TO_CAE.keys())
             
-        # 3. Download and process the Co-Pub reference matrix
         if copub_file_id:
             request = service.files().get_media(fileId=copub_file_id)
             fh = io.BytesIO()
@@ -131,6 +127,7 @@ def load_reference_databases_from_drive():
     except Exception as e:
         st.error(f"Failed to fetch master files from Google Drive folder location: {e}")
         return False
+
 
 # ==========================================
 # PARSING UTILITIES
@@ -233,12 +230,18 @@ def parse_writers_block(block_str, title_context="", fallback_society="BMI"):
     writers = []
     for line in lines:
         line_upper = line.upper()
+        
+        # Explicit Non-US core society fallback filter matrix
         if "SOCAN" in line_upper: society = "SOCAN"
         elif "ASCAP" in line_upper: society = "ASCAP"
         elif "SESAC" in line_upper: society = "SESAC"
-        elif any(eur in line_upper for eur in ["SUISA", "GEMA", "PRS", "SACEM", "TEOSTO", "TONO", "AKM", "SGAE", "SPA", "EUROPE"]):
-            society = "EUROPE"
-        else: society = fallback_society
+        elif "BMI" in line_upper: society = "BMI"
+        else:
+            # Rule: Any society explicit or fallback not matching standard NA links routes to Europe
+            if any(x in line_upper for x in ["SUISA", "GEMA", "PRS", "SACEM", "BUMA", "STEMRA", "TEOSTO", "TONO", "AKM", "SGAE", "SPA", "EUROPE"]):
+                society = "EUROPE"
+            else:
+                society = "EUROPE" if fallback_society == "EUROPE" else "BMI"
 
         ipi_match = re.search(r"\b(\d{7,11})\b", line)
         ipi = ipi_match.group(1) if ipi_match else "no match"
@@ -304,7 +307,6 @@ def get_publisher_details(society_name):
 # ==========================================
 # BACKGROUND DATA TRIGGER EXECUTION
 # ==========================================
-# Automatically connect and pull reference logs from Drive folder structure seamlessly
 db_connected = load_reference_databases_from_drive()
 
 if db_connected:
@@ -438,19 +440,30 @@ if input_file:
                         "Participant 3 Performance Owned": w_perf, "Participant 3 Performance Collected": w_perf, "Participant 3 Capacity": "Lyrics and Music"
                     })
 
-                # 2. Map Direct Split Segments
+                # 2. Map Direct Split Segments (FIXED: Grouped strictly by parsed writer society arrays)
                 payday_groups = defaultdict(list)
                 for pw in payday_writers:
-                    is_row_eu = "EUROPE" in raw_shares_text.upper() or "SUISA" in raw_shares_text.upper()
-                    g_key = "EUROPE" if is_row_eu else pw["society"]
-                    payday_groups[g_key].append(pw)
+                    payday_groups[pw["society"]].append(pw)
 
                 for group_key, writers_in_group in payday_groups.items():
                     payday_pub_name, payday_pub_cae = get_publisher_details(group_key)
                     
-                    matching_ds = [d for d in direct_shares if group_key in d['payday_pub'].upper() or (group_key=="BMI" and "EMPIRE" in d['payday_pub'].upper())]
+                    # Fuzzy match the direct share amount matching this group's publisher identity
+                    matching_ds = []
+                    for d in direct_shares:
+                        p_pub = d['payday_pub'].upper()
+                        if group_key == "EUROPE" and any(x in p_pub for x in ["EUROPE", "SUISA", "GEMA", "PRS"]):
+                            matching_ds.append(d)
+                        elif group_key == "BMI" and "EMPIRE" in p_pub:
+                            matching_ds.append(d)
+                        elif group_key == "ASCAP" and "TUNES (ASCAP)" in p_pub:
+                            matching_ds.append(d)
+                        elif group_key == "SOCAN" and "CANADA" in p_pub:
+                            matching_ds.append(d)
+                        elif group_key == "SESAC" and "PAYREC" in p_pub:
+                            matching_ds.append(d)
+
                     ds_share = matching_ds[0]['share'] if matching_ds else (direct_shares[0]['share'] if direct_shares else 0.0)
-                    
                     if ds_share == 0.0: continue
                     
                     total_cents = int(round(ds_share * 100))

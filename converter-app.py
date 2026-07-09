@@ -352,8 +352,15 @@ if input_file:
                 label = clean_text(row[col_map["label"]]) if "label" in col_map else ""
                 performers = clean_text(row[col_map["artist"]]).replace("\n", "; ").replace(",", ";") if "artist" in col_map else ""
                 performers = "; ".join([p.strip() for p in performers.split(";") if p.strip()])
-                isrcs = clean_text(row[col_map["isrc"]]).replace("\n", "; ").replace(",", ";") if "isrc" in col_map else ""
-                isrcs = "; ".join([i.strip() for i in isrcs.split(";") if i.strip()])
+                
+                # --- FIXED: RE-ARCHITECTED ROBUST ISRC EXTRACTOR METADATA MODULE ---
+                if "isrc" in col_map:
+                    raw_isrc_text = clean_text(row[col_map["isrc"]])
+                    # Cleaves text strings cleanly by any newlines, commas, or spaces
+                    isrc_tokens = re.split(r"[\s,\n;]+", raw_isrc_text)
+                    isrcs = ";".join([i.strip() for i in isrc_tokens if i.strip()])
+                else:
+                    isrcs = ""
 
                 # --- EXTRACT STRUCTURAL METADATA ARRAYS ---
                 raw_shares_text = clean_text(row[col_map["shares"]]) if "shares" in col_map else ""
@@ -367,7 +374,7 @@ if input_file:
                 addl_writers = parse_writers_block(raw_addl_text, title_context=clean_title)
                 direct_shares, copub_shares = parse_shares_field(raw_shares_text)
 
-                # --- 1. CATALOGUE GROUPS THREE-TAG STRATIFICATION CONCATENATOR ---
+                # --- CATALOGUE GROUPS THREE-TAG STRATIFICATION CONCATENATOR ---
                 cession_val = clean_text(row[col_map["cession"]]).upper() if "cession" in col_map else ""
                 if "Y" in cession_val and "N" in cession_val:
                     tag1 = "Mixed"
@@ -479,7 +486,6 @@ if input_file:
                         elif group_key == "SESAC" and "PAYREC" in p_pub:
                             matching_ds.append(d)
 
-                    # --- FIXED: STRICTLY FALLBACK TO 0.0 IF NO REPERTOIRE MATCH IS DESIGNATED ---
                     ds_share = matching_ds[0]['share'] if matching_ds else 0.0
                     if ds_share == 0.0: continue
                     

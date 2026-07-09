@@ -5,12 +5,12 @@ import streamlit as st
 import pandas as pd
 from collections import defaultdict
 
-# --- FIXED: MOVED GOOGLE API IMPORTS TO THE GLOBAL TOP SCOPE ---
+# --- GOOGLE CORE CLIENT UTILITIES ---
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-# Page setup configuration
+# Main UI layout setup config parameters
 st.set_page_config(page_title="MCAT Converter", page_icon="🎵", layout="wide")
 
 st.title("🎵 MCAT Converter")
@@ -21,7 +21,7 @@ st.markdown("""
 """)
 st.markdown("---")
 
-# Initialize session state variables to prevent download button resets
+# Active browser data session state managers
 if 'processed' not in st.session_state:
     st.session_state.processed = False
 if 'df_works' not in st.session_state:
@@ -33,9 +33,7 @@ if 'df_ip' not in st.session_state:
 if 'df_qc' not in st.session_state:
     st.session_state.df_qc = None
 
-# ==========================================
-# AUTOMATED GOOGLE DRIVE FETCH ENGINE
-# ==========================================
+# Shared Cloud Folder Directory Path
 FOLDER_ID = "13-mxc5a2rIEly3ZMVSOoQjlDA4cmYx-D"
 
 NAME_TO_CAE = {}
@@ -44,9 +42,9 @@ EXPORT_NAMES_UPPER = []
 COPUB_REFERENCE_DB = {}
 
 def get_gdrive_service():
-    """Authenticates using Streamlit's secure Secrets manager profile."""
+    """Builds a verified credential pass over Streamlit cloud secrets configuration."""
     if "gdrive" not in st.secrets:
-        st.error("Missing Google Drive API credentials. Please configure secrets in Streamlit Secrets.")
+        st.error("Missing Google Drive API credentials. Please configure secrets in Streamlit.")
         return None
     
     creds_dict = dict(st.secrets["gdrive"])
@@ -303,21 +301,20 @@ def get_publisher_details(society_name):
 
 
 # ==========================================
-# BACKGROUND DATA TRIGGER EXECUTION
+# BACKGROUND DATA AUTOMATED FETCH
 # ==========================================
 db_connected = load_reference_databases_from_drive()
-
 if db_connected:
-    st.sidebar.success(f"Linked: Cloud databases active ({len(EXPORT_NAMES_UPPER)} writers / {len(COPUB_REFERENCE_DB)} co-pubs)")
+    st.sidebar.success("Linked: Cloud reference files synchronized!")
 else:
-    st.sidebar.warning("Cloud databases offline. Check Streamlit deployment context configs.")
+    st.sidebar.warning("Cloud databases offline. Check Streamlit API Secrets.")
 
 input_file = st.file_uploader("Upload your MCAT Excerpt File", type=["csv", "xlsx"])
 
 if input_file:
     try:
         df = pd.read_csv(input_file) if input_file.name.endswith('.csv') else pd.read_excel(input_file, sheet_name=0)
-        st.success(f"Loaded '{input_file.name}' successfully.")
+        st.success(f"Loaded '{input_file.name}' with {len(df)} lines successfully.")
     except Exception as e:
         st.error(f"Error loading file: {e}")
         df = None
@@ -325,7 +322,6 @@ if input_file:
     if df is not None:
         if st.button("🚀 Process Repertoire Layouts", type="primary"):
             
-            # Smart Header Mapper Matrix
             col_map = {}
             for col in df.columns:
                 c_norm = col.strip().upper().replace("\n", " ")
@@ -360,6 +356,7 @@ if input_file:
                 
                 lang = extrapolate_language(clean_title)
 
+                # --- BUILD WORKS DICTIONARY DATA TAB ---
                 works_data.append({
                     "ID": "", "Title": clean_title, "Composers": "", "Foreign ID": "", "Project ID": "",
                     "Party No": "", "Main Identifier": "", "ISWC": "", "Tunecode": "", "Copyright Date": release_date,
@@ -368,3 +365,190 @@ if input_file:
                     "No. of Composite Works": 0, "Work Version": "Original Work", "Arrangement Type": "Original", 
                     "Lyric Adaption": "Original", "Performers": performers, "Track ISRCs": isrcs, "Territories": "WW",
                     "Catalogue Groups": "PMPE;2026 - July New Works", "Aliases": "", "Notes": notes_cession
+                })
+
+                for alt in alts:
+                    alts_data.append({"Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Alternate Title": alt, "Language": lang})
+
+                # --- ADVANCED IP CHAIN RESOLUTION ENGINE ---
+                raw_shares_text = clean_text(row[col_map["shares"]]) if "shares" in col_map else ""
+                raw_writers_text = clean_text(row[col_map["writers"]]) if "writers" in col_map else ""
+                raw_ipis_text = clean_text(row[col_map["ipis"]]) if "ipis" in col_map else ""
+                raw_addl_text = clean_text(row[col_map["addl"]]) if "addl" in col_map else ""
+                agreement_text = clean_text(row[col_map["agreement"]]).upper() if "agreement" in col_map else ""
+
+                row_fallback = "EUROPE" if any(x in raw_shares_text.upper() for x in ["SUISA", "EUROPE", "GEMA"]) else "BMI"
+                payday_writers = parse_payday_writers(raw_writers_text, raw_ipis_text, title_context=clean_title, fallback_society=row_fallback)
+                addl_writers = parse_writers_block(raw_addl_text, title_context=clean_title)
+                direct_shares, copub_shares = parse_shares_field(raw_shares_text)
+
+                audit_mech_owned, audit_mech_collected, audit_perf_owned, audit_perf_collected = 0.0, 0.0, 0.0, 0.0
+
+                # 1. Map Co-Publishing & Admin Split Segments
+                for cs in copub_shares:
+                    matched_w = None
+                    matched_pub_cae = "no match"
+                    
+                    for ref_name, ref_data in COPUB_REFERENCE_DB.items():
+                        if any(w['name'].split()[-1].lower() in ref_name.lower() for w in payday_writers) and ref_data['pub_name'].upper().split()[0] in cs['personal_pub'].upper():
+                            for w in payday_writers:
+                                if w['name'].split()[-1].lower() in ref_name.lower():
+                                    matched_w = w
+                                    matched_pub_cae = ref_data['pub_ipi']
+                                    break
+                        if matched_w: break
+
+                    if not matched_w and payday_writers:
+                        for w in payday_writers:
+                            if w['name'].split()[-1].lower() in cs['personal_pub'].lower():
+                                matched_w = w
+                                break
+
+                    total_cents = int(round(cs['share'] * 100))
+                    pub_perf_cents = total_cents // 2
+                    writer_perf_cents = total_cents - pub_perf_cents
+
+                    m_owned = round(total_cents / 100.0, 2)
+                    p_owned = round(pub_perf_cents / 100.0, 2)
+                    w_perf = round(writer_perf_cents / 100.0, 2)
+
+                    audit_mech_owned += m_owned
+                    audit_mech_collected += m_owned
+                    audit_perf_owned += (p_owned + w_perf)
+                    audit_perf_collected += (p_owned + w_perf)
+
+                    payday_pub_name, payday_pub_cae = get_publisher_details(matched_w['society'] if matched_w else "BMI")
+
+                    ip_chain_data.append({
+                        "Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Territory": "WW",
+                        "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,
+                        "Participant 1 Controlled": "True", "Participant 1 Mechanical Owned": 0.0, "Participant 1 Mechanical Collected": m_owned,
+                        "Participant 1 Performance Owned": 0.0, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Administrator",
+                        
+                        "Participant 2 Type": "Publisher", "Participant 2 Name": cs['personal_pub'], "Participant 2 CAE Number": matched_pub_cae,
+                        "Participant 2 Controlled": "True", "Participant 2 Mechanical Owned": m_owned, "Participant 2 Mechanical Collected": 0.0,
+                        "Participant 2 Performance Owned": p_owned, "Participant 2 Performance Collected": 0.0, "Participant 2 Capacity": "Original Publisher",
+                        
+                        "Participant 3 Type": "Composer", "Participant 3 Name": matched_w['name'] if matched_w else "Unknown", "Participant 3 CAE Number": matched_w['ipi'] if matched_w else "no match",
+                        "Participant 3 Controlled": "True", "Participant 3 Mechanical Owned": 0.0, "Participant 3 Mechanical Collected": 0.0,
+                        "Participant 3 Performance Owned": w_perf, "Participant 3 Performance Collected": w_perf, "Participant 3 Capacity": "Lyrics and Music"
+                    })
+
+                # 2. Map Direct Split Segments
+                payday_groups = defaultdict(list)
+                for pw in payday_writers:
+                    payday_groups[pw["society"]].append(pw)
+
+                for group_key, writers_in_group in payday_groups.items():
+                    payday_pub_name, payday_pub_cae = get_publisher_details(group_key)
+                    
+                    matching_ds = []
+                    for d in direct_shares:
+                        p_pub = d['payday_pub'].upper()
+                        if group_key == "EUROPE" and any(x in p_pub for x in ["EUROPE", "SUISA", "GEMA", "PRS"]):
+                            matching_ds.append(d)
+                        elif group_key == "BMI" and "EMPIRE" in p_pub:
+                            matching_ds.append(d)
+                        elif group_key == "ASCAP" and "TUNES (ASCAP)" in p_pub:
+                            matching_ds.append(d)
+                        elif group_key == "SOCAN" and "CANADA" in p_pub:
+                            matching_ds.append(d)
+                        elif group_key == "SESAC" and "PAYREC" in p_pub:
+                            matching_ds.append(d)
+
+                    ds_share = matching_ds[0]['share'] if matching_ds else (direct_shares[0]['share'] if direct_shares else 0.0)
+                    if ds_share == 0.0: continue
+                    
+                    total_cents = int(round(ds_share * 100))
+                    pub_perf_cents = total_cents // 2
+                    writer_perf_total_cents = total_cents - pub_perf_cents
+
+                    m_owned = round(total_cents / 100.0, 2)
+                    p_owned = round(pub_perf_cents / 100.0, 2)
+
+                    audit_mech_owned += m_owned
+                    audit_mech_collected += m_owned
+                    audit_perf_owned += p_owned
+                    audit_perf_collected += p_owned
+
+                    ip_row_payday = {
+                        "Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Territory": "WW",
+                        "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,
+                        "Participant 1 Controlled": "True", "Participant 1 Mechanical Owned": m_owned, "Participant 1 Mechanical Collected": m_owned,
+                        "Participant 1 Performance Owned": p_owned, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Original Publisher",
+                    }
+
+                    num_writers = len(writers_in_group)
+                    base_writer_cents = writer_perf_total_cents // num_writers
+                    extra_cents_remainder = writer_perf_total_cents % num_writers
+
+                    for p_idx, pw in enumerate(writers_in_group, start=2):
+                        prefix = f"Participant {p_idx}"
+                        allocated_cents = base_writer_cents + (1 if (p_idx - 2) < extra_cents_remainder else 0)
+                        formatted_pw_perf = round(allocated_cents / 100.0, 2)
+
+                        audit_perf_owned += formatted_pw_perf
+                        audit_perf_collected += formatted_pw_perf
+
+                        ip_row_payday.update({
+                            f"{prefix} Type": "Composer", f"{prefix} Name": pw["name"], f"{prefix} CAE Number": pw["ipi"],
+                            f"{prefix} Controlled": "True", f"{prefix} Mechanical Owned": 0.0, f"{prefix} Mechanical Collected": 0.0,
+                            f"{prefix} Performance Owned": formatted_pw_perf, f"{prefix} Performance Collected": formatted_pw_perf, f"{prefix} Capacity": "Lyrics and Music",
+                        })
+                    ip_chain_data.append(ip_row_payday)
+
+                # 3. Add Outside Composers
+                if addl_writers:
+                    ip_row_outside = {"Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Territory": "WW"}
+                    for p_idx, aw in enumerate(addl_writers, start=1):
+                        prefix = f"Participant {p_idx}"
+                        formatted_aw_share = round(aw["share"], 2)
+
+                        audit_mech_owned += formatted_aw_share
+                        audit_mech_collected += formatted_aw_share
+                        audit_perf_owned += formatted_aw_share
+                        audit_perf_collected += formatted_aw_share
+
+                        ip_row_outside.update({
+                            f"{prefix} Type": "Composer", f"{prefix} Name": aw["name"], f"{prefix} CAE Number": aw["ipi"],
+                            f"{prefix} Controlled": "False", f"{prefix} Mechanical Owned": formatted_aw_share, f"{prefix} Mechanical Collected": formatted_aw_share,
+                            f"{prefix} Performance Owned": formatted_aw_share, f"{prefix} Performance Collected": formatted_aw_share, f"{prefix} Capacity": "Lyrics and Music",
+                        })
+                    ip_chain_data.append(ip_row_outside)
+
+                payday_writer_names = "; ".join([pw["name"] for pw in payday_writers]) if payday_writers else "None"
+                
+                if "ADMIN" in agreement_text:
+                    region_tag = "ADMIN CATALOG REPERTOIRE"
+                elif copub_shares:
+                    region_tag = "CO-PUB REPERTOIRE"
+                else:
+                    region_tag = "STANDARD CATALOG REPERTOIRE"
+
+                qc_data.append({
+                    "Work Title": clean_title,
+                    "Repertoire Region": region_tag,
+                    "Payday Writers": payday_writer_names,
+                    "Total Mechanical Owned": round(audit_mech_owned, 2),
+                    "Total Mechanical Collected": round(audit_mech_collected, 2),
+                    "Total Performance Owned": round(audit_perf_owned, 2),
+                    "Total Performance Collected": round(audit_perf_collected, 2)
+                })
+
+            st.session_state.df_works = pd.DataFrame(works_data)
+            st.session_state.df_alts = pd.DataFrame(alts_data)
+            st.session_state.df_ip = pd.DataFrame(ip_chain_data)
+            st.session_state.df_qc = pd.DataFrame(qc_data)
+            st.session_state.processed = True
+
+        if st.session_state.processed:
+            st.markdown("---")
+            st.subheader("📥 Download Generated Sheets")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1: st.download_button("📋 Download Works Tab", data=st.session_state.df_works.to_csv(index=False).encode('utf-8'), file_name="Curve_Works_Tab.csv", mime="text/csv")
+            with col2: st.download_button("🔗 Download Alternate Titles", data=st.session_state.df_alts.to_csv(index=False).encode('utf-8'), file_name="Curve_Alternate_Titles_Tab.csv", mime="text/csv")
+            with col3: st.download_button("⛓️ Download IP Chain Tab", data=st.session_state.df_ip.to_csv(index=False).encode('utf-8'), file_name="Curve_IP_Chain_Tab.csv", mime="text/csv")
+            with col4: st.download_button("🔍 Download QC Audit Log", data=st.session_state.df_qc.to_csv(index=False).encode('utf-8'), file_name="Curve_Quality_Control.csv", mime="text/csv")
+
+            st.subheader("📊 Quality Control Summary Preview")
+            st.dataframe(st.session_state.df_qc, use_container_width=True)

@@ -41,6 +41,17 @@ TOKEN_SET_TO_CAE = {}
 EXPORT_NAMES_UPPER = []
 COPUB_REFERENCE_DB = {}
 
+# --- DEFINE THE EXACT 125-COLUMN BLUEPRINT MANDATED BY CURVE ---
+IP_CHAIN_HEADERS = ["Work ID", "Work Title", "Work Main Identifier", "Work Tunecode", "Territory"]
+for i in range(1, 11):
+    IP_CHAIN_HEADERS.extend([
+        f"Participant {i} Type", f"Participant {i} Name", f"Participant {i} First Name",
+        f"Participant {i} Middle Name", f"Participant {i} Surname", f"Participant {i} CAE Number",
+        f"Participant {i} Controlled", f"Participant {i} Mechanical Owned", f"Participant {i} Mechanical Collected",
+        f"Participant {i} Performance Owned", f"Participant {i} Performance Collected", f"Participant {i} Capacity"
+    ])
+
+
 def get_gdrive_service():
     """Builds a verified credential pass over Streamlit cloud secrets configuration."""
     if "gdrive" not in st.secrets:
@@ -340,7 +351,7 @@ if input_file:
                 elif "CESSION" in c_norm: col_map["cession"] = col
                 elif "AGREEMENT" in c_norm: col_map["agreement"] = col
 
-            # --- FIXED: SHORTEST-NAME PRIORITY RESOLUTION SYSTEM FOR ISRC CODES ---
+            # Shortest-name priority resolution mapping logic for ISRC column isolation
             isrc_cols = [c for c in df.columns if "ISRC" in c.strip().upper()]
             if isrc_cols:
                 isrc_cols.sort(key=len)
@@ -358,7 +369,6 @@ if input_file:
                 performers = clean_text(row[col_map["artist"]]).replace("\n", "; ").replace(",", ";") if "artist" in col_map else ""
                 performers = "; ".join([p.strip() for p in performers.split(";") if p.strip()])
                 
-                # --- EXTRACT CLEAN SEMICOLONED TRACK ISRCS ---
                 if "isrc" in col_map:
                     raw_isrc_text = clean_text(row[col_map["isrc"]])
                     isrc_tokens = re.split(r"[\s,\n;]+", raw_isrc_text)
@@ -399,7 +409,6 @@ if input_file:
 
                 tag3 = clean_text(custom_delivery_tag)
                 catalogue_groups = f"{tag1};{tag2};{tag3}"
-
                 lang = extrapolate_language(clean_title)
 
                 works_data.append({
@@ -416,6 +425,11 @@ if input_file:
                     alts_data.append({"Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Alternate Title": alt, "Language": lang})
 
                 audit_mech_owned, audit_mech_collected, audit_perf_owned, audit_perf_collected = 0.0, 0.0, 0.0, 0.0
+
+                # Initialize a pre-padded blank base dictionary tracking all 125 exact metadata fields
+                base_ip_row = {col: "" for col in IP_CHAIN_HEADERS}
+                base_ip_row["Work Title"] = clean_title
+                base_ip_row["Territory"] = "WW"
 
                 # 1. Map Co-Publishing & Admin Split Segments
                 for cs in copub_shares:
@@ -452,9 +466,8 @@ if input_file:
 
                     payday_pub_name, payday_pub_cae = get_publisher_details(matched_w['society'] if matched_w else "BMI")
 
-                    # Participant 1 = Payday (Admin), Participant 2 = Entity (Orig), Participant 3 = Writer
-                    ip_chain_data.append({
-                        "Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Territory": "WW",
+                    ip_row_payday = dict(base_ip_row)
+                    ip_row_payday.update({
                         "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,
                         "Participant 1 Controlled": "True", "Participant 1 Mechanical Owned": 0.0, "Participant 1 Mechanical Collected": m_owned,
                         "Participant 1 Performance Owned": 0.0, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Administrator",
@@ -467,6 +480,7 @@ if input_file:
                         "Participant 3 Controlled": "True", "Participant 3 Mechanical Owned": 0.0, "Participant 3 Mechanical Collected": 0.0,
                         "Participant 3 Performance Owned": w_perf, "Participant 3 Performance Collected": w_perf, "Participant 3 Capacity": "Lyrics and Music"
                     })
+                    ip_chain_data.append(ip_row_payday)
 
                 # 2. Map Direct Split Segments
                 payday_groups = defaultdict(list)
@@ -505,18 +519,19 @@ if input_file:
                     audit_perf_owned += p_owned
                     audit_perf_collected += p_owned
 
-                    ip_row_payday = {
-                        "Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Territory": "WW",
+                    ip_row_payday = dict(base_ip_row)
+                    ip_row_payday.update({
                         "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,
                         "Participant 1 Controlled": "True", "Participant 1 Mechanical Owned": m_owned, "Participant 1 Mechanical Collected": m_owned,
                         "Participant 1 Performance Owned": p_owned, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Original Publisher",
-                    }
+                    })
 
                     num_writers = len(writers_in_group)
                     base_writer_cents = writer_perf_total_cents // num_writers
                     extra_cents_remainder = writer_perf_total_cents % num_writers
 
                     for p_idx, pw in enumerate(writers_in_group, start=2):
+                        if p_idx > 10: break # Guard check against overflowing layout boundary rules
                         prefix = f"Participant {p_idx}"
                         allocated_cents = base_writer_cents + (1 if (p_idx - 2) < extra_cents_remainder else 0)
                         formatted_pw_perf = round(allocated_cents / 100.0, 2)
@@ -533,8 +548,9 @@ if input_file:
 
                 # 3. Add Outside Composers
                 if addl_writers:
-                    ip_row_outside = {"Work ID": "", "Work Title": clean_title, "Work Main Identifier": "", "Work Tunecode": "", "Territory": "WW"}
+                    ip_row_outside = dict(base_ip_row)
                     for p_idx, aw in enumerate(addl_writers, start=1):
+                        if p_idx > 10: break # Guard check against overflowing structural indices
                         prefix = f"Participant {p_idx}"
                         formatted_aw_share = round(aw["share"], 2)
 
@@ -571,7 +587,14 @@ if input_file:
 
             st.session_state.df_works = pd.DataFrame(works_data)
             st.session_state.df_alts = pd.DataFrame(alts_data)
-            st.session_state.df_ip = pd.DataFrame(ip_chain_data)
+            
+            # Convert and strictly reindex to retain structural empty participant columns
+            df_ip_out = pd.DataFrame(ip_chain_data)
+            if not df_ip_out.empty:
+                st.session_state.df_ip = df_ip_out.reindex(columns=IP_CHAIN_HEADERS)
+            else:
+                st.session_state.df_ip = pd.DataFrame(columns=IP_CHAIN_HEADERS)
+                
             st.session_state.df_qc = pd.DataFrame(qc_data)
             st.session_state.processed = True
 

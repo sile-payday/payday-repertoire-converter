@@ -5,11 +5,16 @@ import streamlit as st
 import pandas as pd
 from collections import defaultdict
 
-# Page setup configuration
-st.set_page_config(page_title="Payday Repertoire Converter", page_icon="🎵", layout="wide")
+# Page setup configuration matching your new name
+st.set_page_config(page_title="MCAT Converter", page_icon="🎵", layout="wide")
 
-st.title("🎵 Payday Repertoire Converter")
-st.markdown("Upload your master delivery spreadsheet below to instantly generate your Curve ingestion files and audit balance sheets.")
+st.title("🎵 MCAT Converter")
+st.markdown("""
+1. **Retrieve the most recent Composer Export and co-pub reference** from `G:\\Shared drives\\Publishing Admin\\Writer Clients\\Bulk Import WIP` (Pub admin google drive).
+2. **Prepare your MCAT excerpt** of works you want to import.
+3. 💡 *If you get an error message, ask AI (give it the link to this app along with the exact error message you receive).*
+""")
+st.markdown("---")
 
 # Initialize session state variables to prevent download button resets
 if 'processed' not in st.session_state:
@@ -49,7 +54,6 @@ def index_composer_database(uploaded_db_file):
     if uploaded_db_file is None:
         return
     try:
-        # Added low_memory=False to eliminate Dtype Warnings from the system logs
         df_comp = pd.read_csv(uploaded_db_file, low_memory=False)
         for _, row in df_comp.iterrows():
             name_orig = str(row['Name']).strip().upper()
@@ -79,7 +83,7 @@ def index_copub_reference(uploaded_copub_file):
                 }
         st.sidebar.success(f"Indexed {len(COPUB_REFERENCE_DB)} co-publishing/admin contract entities!")
     except Exception as e:
-        st.sidebar.error(f"Failed to index co-pub reference matrix: {e}")
+        st.sidebar.error(f"Failed to index reference matrix: {e}")
 
 def query_database_for_cae(name_str):
     name_str = str(name_str).strip().upper()
@@ -245,7 +249,7 @@ def get_publisher_details(society_name):
 # INTERFACE SIDEBAR FILTERS
 # ==========================================
 with st.sidebar:
-    st.header("🗄️ Optional Reference Reference")
+    st.header("🗄️ Reference Databases")
     db_file = st.file_uploader("Upload 'Composer Export' (.csv)", type=["csv"])
     if db_file:
         index_composer_database(db_file)
@@ -255,7 +259,7 @@ with st.sidebar:
     if copub_file:
         index_copub_reference(copub_file)
 
-input_file = st.file_uploader("Upload your Repertoire File", type=["csv", "xlsx"])
+input_file = st.file_uploader("Upload your MCAT Excerpt File (CSV or Excel)", type=["csv", "xlsx"])
 
 if input_file:
     try:
@@ -301,7 +305,6 @@ if input_file:
                 cession_val = clean_text(row[col_map["cession"]]).upper() if "cession" in col_map else ""
                 notes_cession = "Mixed" if ("Y" in cession_val and "N" in cession_val) else ("BIEM" if "Y" in cession_val else "AA")
                 
-                # Resolving the language definition safely
                 lang = extrapolate_language(clean_title)
 
                 works_data.append({

@@ -36,11 +36,6 @@ if 'df_qc' not in st.session_state:
 # Shared Cloud Folder Directory Path
 FOLDER_ID = "13-mxc5a2rIEly3ZMVSOoQjlDA4cmYx-D"
 
-NAME_TO_CAE = {}
-TOKEN_SET_TO_CAE = {}
-EXPORT_NAMES_UPPER = []
-COPUB_REFERENCE_DB = {}
-
 # --- DEFINE THE EXACT 125-COLUMN BLUEPRINT MANDATED BY CURVE ---
 IP_CHAIN_HEADERS = ["Work ID", "Work Title", "Work Main Identifier", "Work Tunecode", "Territory"]
 for i in range(1, 11):
@@ -67,11 +62,15 @@ def get_gdrive_service():
 
 @st.cache_data(ttl=3600)
 def load_reference_databases_from_drive():
-    global NAME_TO_CAE, TOKEN_SET_TO_CAE, EXPORT_NAMES_UPPER, COPUB_REFERENCE_DB
+    """Fetches reference data from Google Drive and returns data structures to avoid caching traps."""
+    name_to_cae = {}
+    token_set_to_cae = {}
+    export_names_upper = []
+    copub_reference_db = {}
 
     service = get_gdrive_service()
     if not service:
-        return False
+        return name_to_cae, token_set_to_cae, export_names_upper, copub_reference_db, False
         
     try:
         results = service.files().list(
@@ -102,17 +101,15 @@ def load_reference_databases_from_drive():
             fh.seek(0)
             
             df_comp = pd.read_csv(fh, low_memory=False)
-            NAME_TO_CAE.clear()
-            TOKEN_SET_TO_CAE.clear()
             for _, row in df_comp.iterrows():
                 name_orig = str(row['Name']).strip().upper()
                 cae = clean_cae(row['CAE Number'])
                 if name_orig and cae != "no match":
-                    NAME_TO_CAE[name_orig] = cae
+                    name_to_cae[name_orig] = cae
                     tokens = frozenset(name_orig.split())
                     if tokens:
-                        TOKEN_SET_TO_CAE[tokens] = cae
-            EXPORT_NAMES_UPPER = list(NAME_TO_CAE.keys())
+                        token_set_to_cae[tokens] = cae
+            export_names_upper = list(name_to_cae.keys())
             
         if copub_file_id:
             request = service.files().get_media(fileId=copub_file_id)
@@ -124,18 +121,17 @@ def load_reference_databases_from_drive():
             fh.seek(0)
             
             df_cp = pd.read_excel(fh, sheet_name=0) if copub_is_xlsx else pd.read_csv(fh)
-            COPUB_REFERENCE_DB.clear()
             for _, row in df_cp.iterrows():
                 if 'Writer Name' in df_cp.columns and 'Publishing Entity Name' in df_cp.columns:
                     w_clean = str(row['Writer Name']).split('(pka')[0].strip().upper()
-                    COPUB_REFERENCE_DB[w_clean] = {
+                    copub_reference_db[w_clean] = {
                         'pub_name': str(row['Publishing Entity Name']).strip(),
                         'pub_ipi': clean_cae(row.get('Publishing Entity IPI', 'no match'))
                     }
-        return True
+        return name_to_cae, token_set_to_cae, export_names_upper, copub_reference_db, True
     except Exception as e:
         st.error(f"Failed to fetch master files from Google Drive folder location: {e}")
-        return False
+        return name_to_cae, token_set_to_cae, export_names_upper, copub_reference_db, False
 
 
 # ==========================================
@@ -151,7 +147,7 @@ def clean_cae(val):
         s = s.zfill(9)
     return s
 
-def query_database_for_cae(name_str):
+def query_database_for_cae(name_str, name_to_cae, token_set_to_cae, export_names_upper):
     name_str = str(name_str).strip().upper()
     if not name_str or name_str in ["N/A", "UNKNOWN"]:
         return "no match"
@@ -159,17 +155,17 @@ def query_database_for_cae(name_str):
     query_tokens = frozenset(name_clean.split())
     if not query_tokens:
         return "no match"
-    if name_str in NAME_TO_CAE:
-        return NAME_TO_CAE[name_str]
-    if query_tokens in TOKEN_SET_TO_CAE:
-        return TOKEN_SET_TO_CAE[query_tokens]
-    for db_tokens, cae in TOKEN_SET_TO_CAE.items():
+    if name_str in name_to_cae:
+        return name_to_cae[name_str]
+    if query_tokens in token_set_to_cae:
+        return token_set_to_cae[query_tokens]
+    for db_tokens, cae in token_set_to_cae.items():
         if query_tokens.issubset(db_tokens) or db_tokens.issubset(query_tokens):
             if len(query_tokens.intersection(db_tokens)) >= 2:
                 return cae
-    matches = difflib.get_close_matches(name_str, EXPORT_NAMES_UPPER, n=1, cutoff=0.85)
+    matches = difflib.get_close_matches(name_str, export_names_upper, n=1, cutoff=0.85)
     if matches:
-        return NAME_TO_CAE[matches[0]]
+        return name_to_cae[matches[0]]
     return "no match"
 
 def clean_text(text):
@@ -232,7 +228,7 @@ def parse_shares_field(shares_str):
                 })
     return direct_shares, copub_shares
 
-def parse_writers_block(block_str, title_context="", fallback_society="BMI"):
+def parse_writers_block(block_str, name_to_cae, token_set_to_cae, export_names_upper, title_context="", fallback_society="BMI"):
     if not block_str or clean_text(block_str).lower() in ["n/a", ""]:
         return []
     lines = [line.strip() for line in str(block_str).split("\n") if line.strip()]
@@ -260,14 +256,14 @@ def parse_writers_block(block_str, title_context="", fallback_society="BMI"):
             name_part = name_part[: share_match.start()]
         name = name_part.strip().strip("-").strip("\"'")
 
-        if ipi == "no match" and name and EXPORT_NAMES_UPPER:
-            ipi = query_database_for_cae(name)
+        if ipi == "no match" and name and export_names_upper:
+            ipi = query_database_for_cae(name, name_to_cae, token_set_to_cae, export_names_upper)
         if name:
             writers.append({"name": name, "ipi": ipi, "share": share, "society": society})
     return writers
 
-def parse_payday_writers(writer_str, ipi_str, title_context="", fallback_society="BMI"):
-    raw_writers = parse_writers_block(writer_str, title_context=title_context, fallback_society=fallback_society)
+def parse_payday_writers(writer_str, ipi_str, name_to_cae, token_set_to_cae, export_names_upper, title_context="", fallback_society="BMI"):
+    raw_writers = parse_writers_block(writer_str, name_to_cae, token_set_to_cae, export_names_upper, title_context=title_context, fallback_society=fallback_society)
     ipi_lines = str(ipi_str).split("\n") if not pd.isna(ipi_str) else []
     ipis_found = {}
     for line in ipi_lines:
@@ -314,9 +310,11 @@ def get_publisher_details(society_name):
 # ==========================================
 # BACKGROUND DATA AUTOMATED FETCH
 # ==========================================
-db_connected = load_reference_databases_from_drive()
+# SAFE RE-ASSIGNMENT MATRIX outside of the cache blocker engine
+NAME_TO_CAE, TOKEN_SET_TO_CAE, EXPORT_NAMES_UPPER, COPUB_REFERENCE_DB, db_connected = load_reference_databases_from_drive()
+
 if db_connected:
-    st.sidebar.success("Linked: Cloud reference files synchronized!")
+    st.sidebar.success(f"Linked: Cloud reference files active ({len(EXPORT_NAMES_UPPER)} writers / {len(COPUB_REFERENCE_DB)} co-pubs)")
 else:
     st.sidebar.warning("Cloud databases offline. Check Streamlit API Secrets.")
 
@@ -372,7 +370,7 @@ if input_file:
                 if "isrc" in col_map:
                     raw_isrc_text = clean_text(row[col_map["isrc"]])
                     isrc_tokens = re.split(r"[\s,\n;]+", raw_isrc_text)
-                    isrcs = ";".join([i.strip() for i in isrc_tokens if i.strip()])
+                    isrcs = ";".join([i.strip() for i in isrcs.split(";") if i.strip()])
                 else:
                     isrcs = ""
 
@@ -384,8 +382,8 @@ if input_file:
                 agreement_text = clean_text(row[col_map["agreement"]]).upper() if "agreement" in col_map else ""
 
                 row_fallback = "EUROPE" if any(x in raw_shares_text.upper() for x in ["SUISA", "EUROPE", "GEMA"]) else "BMI"
-                payday_writers = parse_payday_writers(raw_writers_text, raw_ipis_text, title_context=clean_title, fallback_society=row_fallback)
-                addl_writers = parse_writers_block(raw_addl_text, title_context=clean_title)
+                payday_writers = parse_payday_writers(raw_writers_text, raw_ipis_text, NAME_TO_CAE, TOKEN_SET_TO_CAE, EXPORT_NAMES_UPPER, title_context=clean_title, fallback_society=row_fallback)
+                addl_writers = parse_writers_block(raw_addl_text, NAME_TO_CAE, TOKEN_SET_TO_CAE, EXPORT_NAMES_UPPER, title_context=clean_title)
                 direct_shares, copub_shares = parse_shares_field(raw_shares_text)
 
                 # --- CATALOGUE GROUPS THREE-TAG STRATIFICATION CONCATENATOR ---
@@ -531,7 +529,7 @@ if input_file:
                     extra_cents_remainder = writer_perf_total_cents % num_writers
 
                     for p_idx, pw in enumerate(writers_in_group, start=2):
-                        if p_idx > 10: break # Guard check against overflowing layout boundary rules
+                        if p_idx > 10: break
                         prefix = f"Participant {p_idx}"
                         allocated_cents = base_writer_cents + (1 if (p_idx - 2) < extra_cents_remainder else 0)
                         formatted_pw_perf = round(allocated_cents / 100.0, 2)
@@ -550,7 +548,7 @@ if input_file:
                 if addl_writers:
                     ip_row_outside = dict(base_ip_row)
                     for p_idx, aw in enumerate(addl_writers, start=1):
-                        if p_idx > 10: break # Guard check against overflowing structural indices
+                        if p_idx > 10: break
                         prefix = f"Participant {p_idx}"
                         formatted_aw_share = round(aw["share"], 2)
 
@@ -588,7 +586,6 @@ if input_file:
             st.session_state.df_works = pd.DataFrame(works_data)
             st.session_state.df_alts = pd.DataFrame(alts_data)
             
-            # Convert and strictly reindex to retain structural empty participant columns
             df_ip_out = pd.DataFrame(ip_chain_data)
             if not df_ip_out.empty:
                 st.session_state.df_ip = df_ip_out.reindex(columns=IP_CHAIN_HEADERS)

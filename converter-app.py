@@ -433,20 +433,40 @@ if input_file:
                 for cs in copub_shares:
                     matched_w = None
                     matched_pub_cae = "no match"
+                    share_pub_upper = cs['personal_pub'].upper()
                     
+                    # Loop through reference database to match both writer and publishing entity
                     for ref_name, ref_data in COPUB_REFERENCE_DB.items():
-                        if any(w['name'].split()[-1].lower() in ref_name.lower() for w in payday_writers) and ref_data['pub_name'].upper().split()[0] in cs['personal_pub'].upper():
-                            for w in payday_writers:
-                                if w['name'].split()[-1].lower() in ref_name.lower():
+                        # Check if any of our payday writers match this database entry row
+                        for w in payday_writers:
+                            w_surname = w['name'].split()[-1].lower()
+                            if w_surname in ref_name.lower():
+                                ref_pub_upper = ref_data['pub_name'].upper()
+                                
+                                # Strip out common noise words to isolate the core company name
+                                ref_pub_words = [word for word in ref_pub_upper.split() if word not in ["THE", "INC", "LLC", "MUSIC", "PUBLISHING"]]
+                                
+                                # Broad match cross-referencing over string structures
+                                if (share_pub_upper in ref_pub_upper or ref_pub_upper in share_pub_upper or 
+                                    (ref_pub_words and any(word in share_pub_upper for word in ref_pub_words))):
                                     matched_w = w
                                     matched_pub_cae = ref_data['pub_ipi']
                                     break
-                        if matched_w: break
+                        if matched_w: 
+                            break
 
+                    # FIX: If publisher matching was too strict but the writer's surname matches 
+                    # the share line statement perfectly, pull their reference data explicitly.
                     if not matched_w and payday_writers:
                         for w in payday_writers:
-                            if w['name'].split()[-1].lower() in cs['personal_pub'].lower():
+                            w_surname = w['name'].split()[-1].lower()
+                            if w_surname in share_pub_upper.lower():
                                 matched_w = w
+                                # Crucial Fix: Read the IPI directly from the database row
+                                for ref_name, ref_data in COPUB_REFERENCE_DB.items():
+                                    if w_surname in ref_name.lower():
+                                        matched_pub_cae = ref_data['pub_ipi']
+                                        break
                                 break
 
                     total_cents = int(round(cs['share'] * 100))

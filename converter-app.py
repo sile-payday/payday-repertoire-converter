@@ -16,7 +16,7 @@ st.set_page_config(page_title="MCAT Converter", page_icon="🎵", layout="wide")
 st.title("🎵 MCAT Converter")
 st.markdown("""
 1. **The app automatically pulls the most recent Composer Export and co-pub reference sheets** from your shared Google Drive folder layout.
-2. **Prepare your MCAT excerpt** of works you want to import below.
+2. Follow the instructions here: [[https://chlorinated-journey-98f.notion.site/MCAT-Converter-how-to-3a626add71b980b08113f348e753e4c8?source=copy_link|MCAT Converter how-to]]
 3. 💡 *If you get an error message, ask AI (give it the link to this app along with the exact error message you receive).*
 """)
 st.markdown("---")
@@ -66,7 +66,7 @@ def load_reference_databases_from_drive():
     name_to_cae = {}
     token_set_to_cae = {}
     export_names_upper = []
-    copub_reference_db = {}
+    copub_reference_db = []
 
     service = get_gdrive_service()
     if not service:
@@ -121,13 +121,45 @@ def load_reference_databases_from_drive():
             fh.seek(0)
             
             df_cp = pd.read_excel(fh, sheet_name=0) if copub_is_xlsx else pd.read_csv(fh)
-            for _, row in df_cp.iterrows():
-                if 'Writer Name' in df_cp.columns and 'Publishing Entity Name' in df_cp.columns:
-                    w_clean = str(row['Writer Name']).split('(pka')[0].strip().upper()
-                    copub_reference_db[w_clean] = {
-                        'pub_name': str(row['Publishing Entity Name']).strip(),
-                        'pub_ipi': clean_cae(row.get('Publishing Entity IPI', 'no match'))
-                    }
+            
+            # Flexible column header tracking
+            df_cp.columns = [str(c).strip().upper() for c in df_cp.columns]
+            writer_col = None
+            pub_name_col = None
+            pub_ipi_col = None
+            
+            for c in df_cp.columns:
+                if 'WRITER' in c:
+                    writer_col = c
+                if ('PUBLISHING' in c and 'NAME' in c) or ('PUBLISHER' in c and 'NAME' in c):
+                    pub_name_col = c
+                if 'IPI' in c and 'WRITER' not in c:
+                    pub_ipi_col = c
+                    
+            if not writer_col:
+                writer_cols = [c for c in df_cp.columns if 'WRITER' in c]
+                if writer_cols: writer_col = writer_cols[0]
+            if not pub_name_col:
+                pub_cols = [c for c in df_cp.columns if 'PUB' in c and 'NAME' in c]
+                if pub_cols: pub_name_col = pub_cols[0]
+            if not pub_ipi_col:
+                ipi_cols = [c for c in df_cp.columns if 'IPI' in c or 'CAE' in c]
+                if ipi_cols: pub_ipi_col = ipi_cols[0]
+                
+            if writer_col and pub_name_col:
+                for _, row in df_cp.iterrows():
+                    w_val = row.get(writer_col)
+                    p_name_val = row.get(pub_name_col)
+                    p_ipi_val = row.get(pub_ipi_col) if pub_ipi_col else 'no match'
+                    
+                    if pd.notna(w_val) and pd.notna(p_name_val):
+                        w_clean = str(w_val).split('(pka')[0].strip().upper()
+                        copub_reference_db.append({
+                            'writer_name': w_clean,
+                            'pub_name': str(p_name_val).strip(),
+                            'pub_ipi': clean_cae(p_ipi_val)
+                        })
+                        
         return name_to_cae, token_set_to_cae, export_names_upper, copub_reference_db, True
     except Exception as e:
         st.error(f"Failed to fetch master files from Google Drive folder location: {e}")
@@ -183,7 +215,7 @@ def parse_title_and_alts(title_str):
         alts = []
         split_pattern = r'(?:"\s+and\s+["\']?|\'\s+and\s+["\']?|\s+and\s+|,)'
         for item in re.split(split_pattern, alt_content, flags=re.IGNORECASE):
-            c_item = item.strip('"\' ').rstrip(")]").strip()
+            c_item = item.strip('"\' ').rstrip(")").strip()
             if c_item:
                 alts.append(c_item)
         return clean_title, alts
@@ -433,41 +465,63 @@ if input_file:
                 for cs in copub_shares:
                     matched_w = None
                     matched_pub_cae = "no match"
-                    share_pub_upper = cs['personal_pub'].upper()
+                    share_pub_clean = cs['personal_pub'].strip().upper()
                     
-                    # Loop through reference database to match both writer and publishing entity
-                    for ref_name, ref_data in COPUB_REFERENCE_DB.items():
-                        # Check if any of our payday writers match this database entry row
+                    # Step A: Match using both writer and publisher names from the list database
+                    for ref_item in COPUB_REFERENCE_DB:
+                        ref_name = ref_item['writer_name']
+                        ref_pub_clean = ref_item['pub_name'].strip().upper()
+                        
                         for w in payday_writers:
                             w_surname = w['name'].split()[-1].lower()
                             if w_surname in ref_name.lower():
-                                ref_pub_upper = ref_data['pub_name'].upper()
+                                ref_pub_words = [word for word in ref_pub_clean.split() if word not in ["THE", "INC", "LLC", "MUSIC", "PUBLISHING", "(BMI)", "(ASCAP)", "(SESAC)", "(SOCAN)"]]
+                                share_pub_words = [word for word in share_pub_clean.split() if word not in ["THE", "INC", "LLC", "MUSIC", "PUBLISHING", "(BMI)", "(ASCAP)", "(SESAC)", "(SOCAN)"]]
                                 
-                                # Strip out common noise words to isolate the core company name
-                                ref_pub_words = [word for word in ref_pub_upper.split() if word not in ["THE", "INC", "LLC", "MUSIC", "PUBLISHING"]]
-                                
-                                # Broad match cross-referencing over string structures
-                                if (share_pub_upper in ref_pub_upper or ref_pub_upper in share_pub_upper or 
-                                    (ref_pub_words and any(word in share_pub_upper for word in ref_pub_words))):
+                                if (share_pub_clean in ref_pub_clean or ref_pub_clean in share_pub_clean or
+                                    (ref_pub_words and any(word in share_pub_clean for word in ref_pub_words)) or
+                                    (share_pub_words and any(word in ref_pub_clean for word in share_pub_words))):
                                     matched_w = w
-                                    matched_pub_cae = ref_data['pub_ipi']
+                                    matched_pub_cae = ref_item['pub_ipi']
                                     break
-                        if matched_w: 
-                            break
-
-                    # FIX: If publisher matching was too strict but the writer's surname matches 
-                    # the share line statement perfectly, pull their reference data explicitly.
-                    if not matched_w and payday_writers:
-                        for w in payday_writers:
-                            w_surname = w['name'].split()[-1].lower()
-                            if w_surname in share_pub_upper.lower():
-                                matched_w = w
-                                # Crucial Fix: Read the IPI directly from the database row
-                                for ref_name, ref_data in COPUB_REFERENCE_DB.items():
-                                    if w_surname in ref_name.lower():
-                                        matched_pub_cae = ref_data['pub_ipi']
+                        if matched_w: break
+                        
+                    # Step B: Match purely by Publisher Name overlap across the DB rows if writer match failed
+                    if not matched_w:
+                        for ref_item in COPUB_REFERENCE_DB:
+                            ref_name = ref_item['writer_name']
+                            ref_pub_clean = ref_item['pub_name'].strip().upper()
+                            ref_pub_words = [word for word in ref_pub_clean.split() if word not in ["THE", "INC", "LLC", "MUSIC", "PUBLISHING", "(BMI)", "(ASCAP)", "(SESAC)", "(SOCAN)"]]
+                            
+                            if (share_pub_clean in ref_pub_clean or ref_pub_clean in share_pub_clean or
+                                (ref_pub_words and any(word in share_pub_clean for word in ref_pub_words))):
+                                matched_pub_cae = ref_item['pub_ipi']
+                                for w in payday_writers:
+                                    w_surname = w['name'].split()[-1].lower()
+                                    if w_surname in ref_name.lower() or w_surname in share_pub_clean.lower():
+                                        matched_w = w
                                         break
+                                if not matched_w and payday_writers:
+                                    matched_w = payday_writers[0]
                                 break
+
+                    # Step C: Fallback to single payday writer candidate if still unresolved
+                    if not matched_w and payday_writers:
+                        if len(payday_writers) == 1:
+                            matched_w = payday_writers[0]
+                        else:
+                            for w in payday_writers:
+                                if any(part.lower() in share_pub_clean.lower() for part in w['name'].split()):
+                                    matched_w = w
+                                    break
+                            if not matched_w:
+                                    matched_w = payday_writers[0]
+                                
+                    # Step D: Extract structural text-embedded numeric IPI patterns if present
+                    if matched_pub_cae == "no match":
+                        ipi_match = re.search(r"\b(\d{7,11})\b", cs['personal_pub'])
+                        if ipi_match:
+                            matched_pub_cae = clean_cae(ipi_match.group(1))
 
                     total_cents = int(round(cs['share'] * 100))
                     pub_perf_cents = total_cents // 2

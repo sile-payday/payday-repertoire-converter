@@ -16,7 +16,7 @@ st.set_page_config(page_title="MCAT Converter", page_icon="🎵", layout="wide")
 st.title("🎵 MCAT Converter")
 st.markdown("""
 1. **The app automatically pulls the most recent Composer Export and co-pub reference sheets** from your shared Google Drive folder layout.
-2. Follow the instructions here: [[https://chlorinated-journey-98f.notion.site/MCAT-Converter-how-to-3a626add71b980b08113f348e753e4c8?source=copy_link|MCAT Converter how-to]]
+2. Follow the instructions here https://chlorinated-journey-98f.notion.site/MCAT-Converter-how-to-3a626add71b980b08113f348e753e4c8
 3. 💡 *If you get an error message, ask AI (give it the link to this app along with the exact error message you receive).*
 """)
 st.markdown("---")

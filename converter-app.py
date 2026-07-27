@@ -286,7 +286,13 @@ def parse_writers_block(block_str, name_to_cae, token_set_to_cae, export_names_u
         share_match = re.search(r"([\d.]+)\s*%", name_part)
         if share_match:
             name_part = name_part[: share_match.start()]
-        name = name_part.strip().strip("-").strip("\"'")
+            
+        # --- CLEAN UP NAME FIELDS ---
+        # Remove standalone IPI numbers if present
+        name_part = re.sub(r"\b\d{7,11}\b", "", name_part)
+        # Remove parenthetical or bracketed society/IPI affiliations (e.g. (BMI), [ASCAP], etc.)
+        name_part = re.sub(r"\s*[\(\[].*?[\)\]]", "", name_part)
+        name = name_part.strip().strip("-").strip("\"'").strip()
 
         if ipi == "no match" and name and export_names_upper:
             ipi = query_database_for_cae(name, name_to_cae, token_set_to_cae, export_names_upper)
@@ -542,7 +548,7 @@ if input_file:
                     ip_row_payday.update({
                         "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,
                         "Participant 1 Controlled": "True", "Participant 1 Mechanical Owned": 0.0, "Participant 1 Mechanical Collected": m_owned,
-                        "Participant 1 Performance Owned": 0.0, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Administrator",
+                        "Participant 1 Performance Owned": 0.0, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Admin",
                         
                         "Participant 2 Type": "Publisher", "Participant 2 Name": cs['personal_pub'], "Participant 2 CAE Number": matched_pub_cae,
                         "Participant 2 Controlled": "True", "Participant 2 Mechanical Owned": m_owned, "Participant 2 Mechanical Collected": 0.0,

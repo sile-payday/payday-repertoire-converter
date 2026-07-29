@@ -169,6 +169,21 @@ def load_reference_databases_from_drive():
 # ==========================================
 # PARSING UTILITIES
 # ==========================================
+def extract_year(date_val):
+    if not date_val or pd.isna(date_val):
+        return ""
+    s = str(date_val).strip()
+    match = re.search(r'\b(19\d{2}|20\d{2})\b', s)
+    if match:
+        return match.group(1)
+    try:
+        dt = pd.to_datetime(s)
+        if pd.notna(dt):
+            return str(dt.year)
+    except Exception:
+        pass
+    return ""
+
 def clean_cae(val):
     if pd.isna(val):
         return "no match"
@@ -277,7 +292,7 @@ def clean_composer_name(raw_name):
     soc_pattern = r"\s*[\(\[]?\s*\b(?:" + "|".join(societies) + r")\b\s*[\)\]]?"
     name = re.sub(soc_pattern, "", name, flags=re.IGNORECASE)
     
-    # 5. Clean trailing/leading punctuation, spaces, quotes, hyphens, brackets
+    # 5. Clean trailing/leading punctuation, spaces, quotes, hyphens
     name = re.sub(r"^[-\s\"'\(\)\[\]]+|[-_\s\"'\(\)\[\]]+$", "", name).strip()
     
     # 6. Final safety check: if trailing parentheses/brackets remain empty, clean them
@@ -465,7 +480,7 @@ if input_file:
                 works_data.append({
                     "ID": "", "Title": clean_title, "Composers": "", "Foreign ID": "", "Project ID": "",
                     "Party No": "", "Main Identifier": "", "ISWC": "", "Tunecode": "", "Copyright Date": release_date,
-                    "Label Copy": f"(P) {release_date[-4:] if len(release_date)>4 else ''} {label}".strip(), "Priority Work": "False", 
+                    "Label Copy": f"(P) {extract_year(release_date)} {label}".strip(), "Priority Work": "False", 
                     "Production Library Work": "False", "Category": "Pop", "Language": lang, "Composite Type": "", 
                     "No. of Composite Works": "", "Work Version": "Original Work", "Arrangement Type": "", 
                     "Lyric Adaption": "", "Performers": performers, "Track ISRCs": isrcs, "Territories": "WW",

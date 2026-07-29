@@ -260,6 +260,31 @@ def parse_shares_field(shares_str):
                 })
     return direct_shares, copub_shares
 
+def clean_composer_name(raw_name):
+    # 1. Truncate at (pka if present
+    name = re.split(r'\(pka', str(raw_name), flags=re.IGNORECASE)[0].strip()
+    
+    # 2. Remove percentage patterns like - 50% or 50%
+    share_match = re.search(r"([\d.]+)\s*%", name)
+    if share_match:
+        name = name[: share_match.start()]
+        
+    # 3. Remove standalone or parenthesized/bracketed IPI numbers (7-11 digits)
+    name = re.sub(r"\s*[\(\[]?\s*\b\d{7,11}\b\s*[\)\]]?", "", name)
+    
+    # 4. Remove society affiliations in parentheses or brackets or trailing standalone
+    societies = ["SOCAN", "ASCAP", "SESAC", "BMI", "SUISA", "GEMA", "PRS", "SACEM", "BUMA", "STEMRA", "TEOSTO", "TONO", "AKM", "SGAE", "SPA", "EUROPE"]
+    soc_pattern = r"\s*[\(\[]?\s*\b(?:" + "|".join(societies) + r")\b\s*[\)\]]?"
+    name = re.sub(soc_pattern, "", name, flags=re.IGNORECASE)
+    
+    # 5. Clean trailing/leading punctuation, spaces, quotes, hyphens, brackets
+    name = re.sub(r"^[-\s\"'\(\)\[\]]+|[-_\s\"'\(\)\[\]]+$", "", name).strip()
+    
+    # 6. Final safety check: if trailing parentheses/brackets remain empty, clean them
+    name = re.sub(r"\s*[\(\[]\s*[\)\]]", "", name).strip()
+    
+    return name
+
 def parse_writers_block(block_str, name_to_cae, token_set_to_cae, export_names_upper, title_context="", fallback_society="BMI"):
     if not block_str or clean_text(block_str).lower() in ["n/a", ""]:
         return []
@@ -282,17 +307,7 @@ def parse_writers_block(block_str, name_to_cae, token_set_to_cae, export_names_u
         ipi = ipi_match.group(1) if ipi_match else "no match"
         share = extract_percentage(line, context=title_context)
 
-        name_part = line.split('(pka')[0].strip()
-        share_match = re.search(r"([\d.]+)\s*%", name_part)
-        if share_match:
-            name_part = name_part[: share_match.start()]
-            
-        # --- CLEAN UP NAME FIELDS ---
-        # Remove standalone IPI numbers if present
-        name_part = re.sub(r"\b\d{7,11}\b", "", name_part)
-        # Remove parenthetical or bracketed society/IPI affiliations (e.g. (BMI), [ASCAP], etc.)
-        name_part = re.sub(r"\s*[\(\[].*?[\)\]]", "", name_part)
-        name = name_part.strip().strip("-").strip("\"'").strip()
+        name = clean_composer_name(line)
 
         if ipi == "no match" and name and export_names_upper:
             ipi = query_database_for_cae(name, name_to_cae, token_set_to_cae, export_names_upper)
@@ -451,9 +466,9 @@ if input_file:
                     "ID": "", "Title": clean_title, "Composers": "", "Foreign ID": "", "Project ID": "",
                     "Party No": "", "Main Identifier": "", "ISWC": "", "Tunecode": "", "Copyright Date": release_date,
                     "Label Copy": f"(P) {release_date[-4:] if len(release_date)>4 else ''} {label}".strip(), "Priority Work": "False", 
-                    "Production Library Work": "False", "Category": "Pop", "Language": lang, "Composite Type": "None", 
-                    "No. of Composite Works": 0, "Work Version": "Original Work", "Arrangement Type": "Original", 
-                    "Lyric Adaption": "Original", "Performers": performers, "Track ISRCs": isrcs, "Territories": "WW",
+                    "Production Library Work": "False", "Category": "Pop", "Language": lang, "Composite Type": "", 
+                    "No. of Composite Works": "", "Work Version": "Original Work", "Arrangement Type": "", 
+                    "Lyric Adaption": "", "Performers": performers, "Track ISRCs": isrcs, "Territories": "WW",
                     "Catalogue Groups": catalogue_groups, "Aliases": "", "Notes": ""
                 })
 

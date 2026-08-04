@@ -316,7 +316,7 @@ def parse_writers_block(block_str, name_to_cae, token_set_to_cae, export_names_u
             if any(x in line_upper for x in ["SUISA", "GEMA", "PRS", "SACEM", "BUMA", "STEMRA", "TEOSTO", "TONO", "AKM", "SGAE", "SPA", "EUROPE"]):
                 society = "EUROPE"
             else:
-                society = "EUROPE" if fallback_society == "EUROPE" else "BMI"
+                society = "EUROPE" if fallback_society == "EUROPE" else fallback_society
 
         ipi_match = re.search(r"\b(\d{7,11})\b", line)
         ipi = ipi_match.group(1) if ipi_match else "no match"
@@ -366,6 +366,18 @@ def extrapolate_language(clean_title):
     if "korean version" in title_lower:
         return "Korean"
     return "English"
+
+def infer_society_from_pub_string(pub_str):
+    s = str(pub_str).upper()
+    if "SOCAN" in s or "CANADA" in s:
+        return "SOCAN"
+    elif "ASCAP" in s:
+        return "ASCAP"
+    elif "SESAC" in s or "PAYREC" in s:
+        return "SESAC"
+    elif any(x in s for x in ["EUROPE", "SUISA", "GEMA", "PRS", "SACEM"]):
+        return "EUROPE"
+    return "BMI"
 
 def get_publisher_details(society_name):
     if society_name == "SOCAN": return "Payday Tunes Canada (SOCAN)", "1299996356"
@@ -449,7 +461,18 @@ if input_file:
                 raw_addl_text = clean_text(row[col_map["addl"]]) if "addl" in col_map else ""
                 agreement_text = clean_text(row[col_map["agreement"]]).upper() if "agreement" in col_map else ""
 
-                row_fallback = "EUROPE" if any(x in raw_shares_text.upper() for x in ["SUISA", "EUROPE", "GEMA"]) else "BMI"
+                shares_upper = raw_shares_text.upper()
+                if "ASCAP" in shares_upper:
+                    row_fallback = "ASCAP"
+                elif "SOCAN" in shares_upper or "CANADA" in shares_upper:
+                    row_fallback = "SOCAN"
+                elif "SESAC" in shares_upper or "PAYREC" in shares_upper:
+                    row_fallback = "SESAC"
+                elif any(x in shares_upper for x in ["SUISA", "EUROPE", "GEMA", "PRS", "SACEM"]):
+                    row_fallback = "EUROPE"
+                else:
+                    row_fallback = "BMI"
+
                 payday_writers = parse_payday_writers(raw_writers_text, raw_ipis_text, NAME_TO_CAE, TOKEN_SET_TO_CAE, EXPORT_NAMES_UPPER, title_context=clean_title, fallback_society=row_fallback)
                 addl_writers = parse_writers_block(raw_addl_text, NAME_TO_CAE, TOKEN_SET_TO_CAE, EXPORT_NAMES_UPPER, title_context=clean_title)
                 direct_shares, copub_shares = parse_shares_field(raw_shares_text)
@@ -591,68 +614,117 @@ if input_file:
                     ip_chain_data.append(ip_row_payday)
 
                 # 2. Map Direct Split Segments
-                payday_groups = defaultdict(list)
-                for pw in payday_writers:
-                    payday_groups[pw["society"]].append(pw)
+                if len(direct_shares) == 1 and payday_writers:
+                    d = direct_shares[0]
+                    ds_share = d['share']
+                    if ds_share > 0.0:
+                        inferred_soc = infer_society_from_pub_string(d['payday_pub'])
+                        payday_pub_name, payday_pub_cae = get_publisher_details(inferred_soc)
 
-                for group_key, writers_in_group in payday_groups.items():
-                    payday_pub_name, payday_pub_cae = get_publisher_details(group_key)
-                    
-                    matching_ds = []
-                    for d in direct_shares:
-                        p_pub = d['payday_pub'].upper()
-                        if group_key == "EUROPE" and any(x in p_pub for x in ["EUROPE", "SUISA", "GEMA", "PRS"]):
-                            matching_ds.append(d)
-                        elif group_key == "BMI" and "EMPIRE" in p_pub:
-                            matching_ds.append(d)
-                        elif group_key == "ASCAP" and "TUNES (ASCAP)" in p_pub:
-                            matching_ds.append(d)
-                        elif group_key == "SOCAN" and "CANADA" in p_pub:
-                            matching_ds.append(d)
-                        elif group_key == "SESAC" and "PAYREC" in p_pub:
-                            matching_ds.append(d)
+                        total_cents = int(round(ds_share * 100))
+                        pub_perf_cents = total_cents // 2
+                        writer_perf_total_cents = total_cents - pub_perf_cents
 
-                    ds_share = matching_ds[0]['share'] if matching_ds else 0.0
-                    if ds_share == 0.0: continue
-                    
-                    total_cents = int(round(ds_share * 100))
-                    pub_perf_cents = total_cents // 2
-                    writer_perf_total_cents = total_cents - pub_perf_cents
+                        m_owned = round(total_cents / 100.0, 2)
+                        p_owned = round(pub_perf_cents / 100.0, 2)
 
-                    m_owned = round(total_cents / 100.0, 2)
-                    p_owned = round(pub_perf_cents / 100.0, 2)
+                        audit_mech_owned += m_owned
+                        audit_mech_collected += m_owned
+                        audit_perf_owned += p_owned
+                        audit_perf_collected += p_owned
 
-                    audit_mech_owned += m_owned
-                    audit_mech_collected += m_owned
-                    audit_perf_owned += p_owned
-                    audit_perf_collected += p_owned
-
-                    ip_row_payday = dict(base_ip_row)
-                    ip_row_payday.update({
-                        "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,
-                        "Participant 1 Controlled": "True", "Participant 1 Mechanical Owned": m_owned, "Participant 1 Mechanical Collected": m_owned,
-                        "Participant 1 Performance Owned": p_owned, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Original Publisher",
-                    })
-
-                    num_writers = len(writers_in_group)
-                    base_writer_cents = writer_perf_total_cents // num_writers
-                    extra_cents_remainder = writer_perf_total_cents % num_writers
-
-                    for p_idx, pw in enumerate(writers_in_group, start=2):
-                        if p_idx > 10: break
-                        prefix = f"Participant {p_idx}"
-                        allocated_cents = base_writer_cents + (1 if (p_idx - 2) < extra_cents_remainder else 0)
-                        formatted_pw_perf = round(allocated_cents / 100.0, 2)
-
-                        audit_perf_owned += formatted_pw_perf
-                        audit_perf_collected += formatted_pw_perf
-
+                        ip_row_payday = dict(base_ip_row)
                         ip_row_payday.update({
-                            f"{prefix} Type": "Composer", f"{prefix} Name": pw["name"], f"{prefix} CAE Number": pw["ipi"],
-                            f"{prefix} Controlled": "True", f"{prefix} Mechanical Owned": 0.0, f"{prefix} Mechanical Collected": 0.0,
-                            f"{prefix} Performance Owned": formatted_pw_perf, f"{prefix} Performance Collected": formatted_pw_perf, f"{prefix} Capacity": "Lyrics and Music",
+                            "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,
+                            "Participant 1 Controlled": "True", "Participant 1 Mechanical Owned": m_owned, "Participant 1 Mechanical Collected": m_owned,
+                            "Participant 1 Performance Owned": p_owned, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Original Publisher",
                         })
-                    ip_chain_data.append(ip_row_payday)
+
+                        num_writers = len(payday_writers)
+                        base_writer_cents = writer_perf_total_cents // num_writers
+                        extra_cents_remainder = writer_perf_total_cents % num_writers
+
+                        for p_idx, pw in enumerate(payday_writers, start=2):
+                            if p_idx > 10: break
+                            prefix = f"Participant {p_idx}"
+                            allocated_cents = base_writer_cents + (1 if (p_idx - 2) < extra_cents_remainder else 0)
+                            formatted_pw_perf = round(allocated_cents / 100.0, 2)
+
+                            audit_perf_owned += formatted_pw_perf
+                            audit_perf_collected += formatted_pw_perf
+
+                            ip_row_payday.update({
+                                f"{prefix} Type": "Composer", f"{prefix} Name": pw["name"], f"{prefix} CAE Number": pw["ipi"],
+                                f"{prefix} Controlled": "True", f"{prefix} Mechanical Owned": 0.0, f"{prefix} Mechanical Collected": 0.0,
+                                f"{prefix} Performance Owned": formatted_pw_perf, f"{prefix} Performance Collected": formatted_pw_perf, f"{prefix} Capacity": "Lyrics and Music",
+                            })
+                        ip_chain_data.append(ip_row_payday)
+                elif len(direct_shares) > 1 and payday_writers:
+                    payday_groups = defaultdict(list)
+                    for pw in payday_writers:
+                        payday_groups[pw["society"]].append(pw)
+
+                    for group_key, writers_in_group in payday_groups.items():
+                        payday_pub_name, payday_pub_cae = get_publisher_details(group_key)
+                        
+                        matching_ds = []
+                        for d in direct_shares:
+                            p_pub = d['payday_pub'].upper()
+                            if group_key == "EUROPE" and any(x in p_pub for x in ["EUROPE", "SUISA", "GEMA", "PRS"]):
+                                matching_ds.append(d)
+                            elif group_key == "BMI" and "EMPIRE" in p_pub:
+                                matching_ds.append(d)
+                            elif group_key == "ASCAP" and "TUNES (ASCAP)" in p_pub:
+                                matching_ds.append(d)
+                            elif group_key == "SOCAN" and "CANADA" in p_pub:
+                                matching_ds.append(d)
+                            elif group_key == "SESAC" and "PAYREC" in p_pub:
+                                matching_ds.append(d)
+
+                        if not matching_ds and direct_shares:
+                            matching_ds = [direct_shares[0]]
+
+                        ds_share = matching_ds[0]['share'] if matching_ds else 0.0
+                        if ds_share == 0.0: continue
+                        
+                        total_cents = int(round(ds_share * 100))
+                        pub_perf_cents = total_cents // 2
+                        writer_perf_total_cents = total_cents - pub_perf_cents
+
+                        m_owned = round(total_cents / 100.0, 2)
+                        p_owned = round(pub_perf_cents / 100.0, 2)
+
+                        audit_mech_owned += m_owned
+                        audit_mech_collected += m_owned
+                        audit_perf_owned += p_owned
+                        audit_perf_collected += p_owned
+
+                        ip_row_payday = dict(base_ip_row)
+                        ip_row_payday.update({
+                            "Participant 1 Type": "Publisher", "Participant 1 Name": payday_pub_name, "Participant 1 CAE Number": payday_pub_cae,
+                            "Participant 1 Controlled": "True", "Participant 1 Mechanical Owned": m_owned, "Participant 1 Mechanical Collected": m_owned,
+                            "Participant 1 Performance Owned": p_owned, "Participant 1 Performance Collected": p_owned, "Participant 1 Capacity": "Original Publisher",
+                        })
+
+                        num_writers = len(writers_in_group)
+                        base_writer_cents = writer_perf_total_cents // num_writers
+                        extra_cents_remainder = writer_perf_total_cents % num_writers
+
+                        for p_idx, pw in enumerate(writers_in_group, start=2):
+                            if p_idx > 10: break
+                            prefix = f"Participant {p_idx}"
+                            allocated_cents = base_writer_cents + (1 if (p_idx - 2) < extra_cents_remainder else 0)
+                            formatted_pw_perf = round(allocated_cents / 100.0, 2)
+
+                            audit_perf_owned += formatted_pw_perf
+                            audit_perf_collected += formatted_pw_perf
+
+                            ip_row_payday.update({
+                                f"{prefix} Type": "Composer", f"{prefix} Name": pw["name"], f"{prefix} CAE Number": pw["ipi"],
+                                f"{prefix} Controlled": "True", f"{prefix} Mechanical Owned": 0.0, f"{prefix} Mechanical Collected": 0.0,
+                                f"{prefix} Performance Owned": formatted_pw_perf, f"{prefix} Performance Collected": formatted_pw_perf, f"{prefix} Capacity": "Lyrics and Music",
+                            })
+                        ip_chain_data.append(ip_row_payday)
 
                 # 3. Add Outside Composers
                 if addl_writers:
